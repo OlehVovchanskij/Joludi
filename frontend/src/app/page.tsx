@@ -1,8 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
+import dynamic from "next/dynamic";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Trajectory3D from "../components/Trajectory3D";
 
 const TrajectoryMap = dynamic(() => import("../components/TrajectoryMap"), {
@@ -105,7 +105,11 @@ export default function Home() {
   }, [result]);
 
   const mapPoints = useMemo(
-    () => trajectoryTimeline.map((point) => [point.latitude_deg, point.longitude_deg] as [number, number]),
+    () =>
+      trajectoryTimeline.map(
+        (point) =>
+          [point.latitude_deg, point.longitude_deg] as [number, number],
+      ),
     [trajectoryTimeline],
   );
 
@@ -115,7 +119,8 @@ export default function Home() {
     }
     return {
       min: trajectoryTimeline[0].timestamp_s as number,
-      max: trajectoryTimeline[trajectoryTimeline.length - 1].timestamp_s as number,
+      max: trajectoryTimeline[trajectoryTimeline.length - 1]
+        .timestamp_s as number,
     };
   }, [trajectoryTimeline]);
 
@@ -190,7 +195,8 @@ export default function Home() {
           });
 
           if (summaryResponse.ok) {
-            const summaryData = (await summaryResponse.json()) as SummaryResponse;
+            const summaryData =
+              (await summaryResponse.json()) as SummaryResponse;
             setSummary(summaryData);
           }
         } catch {
@@ -255,13 +261,25 @@ export default function Home() {
   ];
 
   const statusPills = [
-    { label: loading ? "Processing" : analysisReady ? "Ready" : "Idle", active: true },
-    { label: result?.metrics?.error ? "GPS issue" : "Telemetry OK", active: !result?.metrics?.error },
-    { label: summary?.provider === "llm" ? "AI enabled" : "AI fallback", active: Boolean(summary) },
+    {
+      label: loading ? "Processing" : analysisReady ? "Ready" : "Idle",
+      active: true,
+    },
+    {
+      label: result?.metrics?.error ? "GPS issue" : "Telemetry OK",
+      active: !result?.metrics?.error,
+    },
+    {
+      label: summary?.provider === "llm" ? "AI enabled" : "AI fallback",
+      active: Boolean(summary),
+    },
   ];
 
-  const playbackDuration = timeRange ? Math.max(0, timeRange.max - timeRange.min) : 0;
-  const elapsedTime = currentTime && timeRange ? Math.max(0, currentTime - timeRange.min) : 0;
+  const playbackDuration = timeRange
+    ? Math.max(0, timeRange.max - timeRange.min)
+    : 0;
+  const elapsedTime =
+    currentTime && timeRange ? Math.max(0, currentTime - timeRange.min) : 0;
 
   const activeIndex = useMemo(() => {
     if (!trajectoryTimeline.length || currentTime === null) {
@@ -305,7 +323,8 @@ export default function Home() {
           </h1>
           <p className="max-w-2xl text-sm leading-6 text-foreground/75 md:text-base">
             Автоматичний розбір Ardupilot логів, миттєвий розрахунок метрик,
-            анімована OpenStreetMap-траєкторія та ENU 3D-перегляд для аналізу місії.
+            анімована OpenStreetMap-траєкторія та ENU 3D-перегляд для аналізу
+            місії.
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
             {statusPills.map((pill) => (
@@ -327,7 +346,9 @@ export default function Home() {
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground/50">
             Backend Endpoint
           </p>
-          <p className="mt-2 break-all font-mono text-sm text-brand-ink">{API_BASE}</p>
+          <p className="mt-2 break-all font-mono text-sm text-brand-ink">
+            {API_BASE}
+          </p>
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
             {overviewCards.map((card) => (
               <div
@@ -413,10 +434,14 @@ export default function Home() {
             transition={{ duration: 0.3, delay: 0.14 + index * 0.04 }}
           >
             <div className="flex items-center justify-between gap-4">
-              <p className="text-xs uppercase tracking-wide text-foreground/55">{card.label}</p>
+              <p className="text-xs uppercase tracking-wide text-foreground/55">
+                {card.label}
+              </p>
               <span className="h-2 w-2 rounded-full bg-brand/50" />
             </div>
-            <p className="mt-3 text-xl font-bold text-foreground">{card.value}</p>
+            <p className="mt-3 text-xl font-bold text-foreground">
+              {card.value}
+            </p>
           </motion.article>
         ))}
       </motion.section>
@@ -431,7 +456,9 @@ export default function Home() {
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-800">
             AI Summary ({summary.provider})
           </p>
-          <p className="mt-2 text-sm leading-7 text-amber-950">{summary.summary}</p>
+          <p className="mt-2 text-sm leading-7 text-amber-950">
+            {summary.summary}
+          </p>
         </motion.section>
       )}
 
@@ -479,119 +506,121 @@ export default function Home() {
             </div>
           </div>
 
-            {trajectoryTimeline.length > 1 && timeRange ? (
-              <div className="rounded-2xl border border-line/70 bg-surface/90 p-4 shadow-[0_12px_30px_rgba(20,33,29,0.08)]">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.12em] text-foreground/45">Flight timeline</p>
-                    <p className="mt-1 text-sm font-semibold text-foreground">
-                      t+{elapsedTime.toFixed(1)}s / {playbackDuration.toFixed(1)}s
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsPlaying((prev) => !prev)}
-                      className="rounded-full border border-line bg-surface px-4 py-2 text-xs font-semibold uppercase tracking-wide text-foreground/70"
-                    >
-                      {isPlaying ? "Pause" : "Play"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (timeRange) {
-                          setCurrentTime(timeRange.min);
-                          setIsPlaying(false);
-                        }
-                      }}
-                      className="rounded-full border border-line bg-surface px-4 py-2 text-xs font-semibold uppercase tracking-wide text-foreground/70"
-                    >
-                      Reset
-                    </button>
-                  </div>
+          {trajectoryTimeline.length > 1 && timeRange ? (
+            <div className="rounded-2xl border border-line/70 bg-surface/90 p-4 shadow-[0_12px_30px_rgba(20,33,29,0.08)]">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.12em] text-foreground/45">
+                    Flight timeline
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    t+{elapsedTime.toFixed(1)}s / {playbackDuration.toFixed(1)}s
+                  </p>
                 </div>
-
-                <div className="mt-4">
-                  <input
-                    type="range"
-                    min={0}
-                    max={playbackDuration}
-                    step={0.1}
-                    value={elapsedTime}
-                    onChange={(event) => {
-                      if (!timeRange) {
-                        return;
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsPlaying((prev) => !prev)}
+                    className="rounded-full border border-line bg-surface px-4 py-2 text-xs font-semibold uppercase tracking-wide text-foreground/70"
+                  >
+                    {isPlaying ? "Pause" : "Play"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (timeRange) {
+                        setCurrentTime(timeRange.min);
+                        setIsPlaying(false);
                       }
-                      setCurrentTime(timeRange.min + Number(event.target.value));
-                      setIsPlaying(false);
                     }}
-                    className="w-full accent-emerald-600"
-                  />
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-3 text-xs text-foreground/60">
-                    <span>Start</span>
-                    <div className="flex flex-wrap gap-2">
-                      {[0.5, 1, 2, 4].map((speed) => (
-                        <button
-                          key={speed}
-                          type="button"
-                          onClick={() => setPlaybackSpeed(speed)}
-                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                            playbackSpeed === speed
-                              ? "bg-brand text-white"
-                              : "border border-line bg-surface text-foreground/65"
-                          }`}
-                        >
-                          {speed}x
-                        </button>
-                      ))}
-                    </div>
-                    <span>End</span>
-                  </div>
+                    className="rounded-full border border-line bg-surface px-4 py-2 text-xs font-semibold uppercase tracking-wide text-foreground/70"
+                  >
+                    Reset
+                  </button>
                 </div>
               </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-line bg-surface-soft/70 p-4 text-xs text-foreground/60">
-                Таймлайн стане доступним після аналізу траєкторії.
-              </div>
-            )}
 
-            {activeView === "map" && mapPoints.length > 1 ? (
-              <motion.div
-                key="map"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.25 }}
-              >
-                <TrajectoryMap points={mapPoints} activeIndex={activeIndex} />
-              </motion.div>
-            ) : activeView === "threeD" ? (
-              <motion.div
-                key="3d"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.25 }}
-              >
-                <Trajectory3D
-                  figure={result?.plotly_figure ?? null}
-                  activePoint={
-                    activePoint &&
-                    typeof activePoint.east_m === "number" &&
-                    typeof activePoint.north_m === "number" &&
-                    typeof activePoint.up_m === "number"
-                      ? {
-                          east_m: activePoint.east_m,
-                          north_m: activePoint.north_m,
-                          up_m: activePoint.up_m,
-                        }
-                      : null
-                  }
+              <div className="mt-4">
+                <input
+                  type="range"
+                  min={0}
+                  max={playbackDuration}
+                  step={0.1}
+                  value={elapsedTime}
+                  onChange={(event) => {
+                    if (!timeRange) {
+                      return;
+                    }
+                    setCurrentTime(timeRange.min + Number(event.target.value));
+                    setIsPlaying(false);
+                  }}
+                  className="w-full accent-emerald-600"
                 />
-              </motion.div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-line bg-surface-soft/70 p-6 text-sm text-foreground/60">
-                Після аналізу тут зʼявиться трек польоту.
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-3 text-xs text-foreground/60">
+                  <span>Start</span>
+                  <div className="flex flex-wrap gap-2">
+                    {[0.5, 1, 2, 4].map((speed) => (
+                      <button
+                        key={speed}
+                        type="button"
+                        onClick={() => setPlaybackSpeed(speed)}
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          playbackSpeed === speed
+                            ? "bg-brand text-white"
+                            : "border border-line bg-surface text-foreground/65"
+                        }`}
+                      >
+                        {speed}x
+                      </button>
+                    ))}
+                  </div>
+                  <span>End</span>
+                </div>
               </div>
-            )}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-line bg-surface-soft/70 p-4 text-xs text-foreground/60">
+              Таймлайн стане доступним після аналізу траєкторії.
+            </div>
+          )}
+
+          {activeView === "map" && mapPoints.length > 1 ? (
+            <motion.div
+              key="map"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.25 }}
+            >
+              <TrajectoryMap points={mapPoints} activeIndex={activeIndex} />
+            </motion.div>
+          ) : activeView === "threeD" ? (
+            <motion.div
+              key="3d"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.25 }}
+            >
+              <Trajectory3D
+                figure={result?.plotly_figure ?? null}
+                activePoint={
+                  activePoint &&
+                  typeof activePoint.east_m === "number" &&
+                  typeof activePoint.north_m === "number" &&
+                  typeof activePoint.up_m === "number"
+                    ? {
+                        east_m: activePoint.east_m,
+                        north_m: activePoint.north_m,
+                        up_m: activePoint.up_m,
+                      }
+                    : null
+                }
+              />
+            </motion.div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-line bg-surface-soft/70 p-6 text-sm text-foreground/60">
+              Після аналізу тут зʼявиться трек польоту.
+            </div>
+          )}
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
@@ -629,10 +658,19 @@ export default function Home() {
               description: "час від старту",
             },
           ].map((item) => (
-            <article key={item.label} className="rounded-2xl border border-line/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9)_0%,rgba(237,243,239,0.78)_100%)] p-4 shadow-[0_10px_26px_rgba(20,33,29,0.06)]">
-              <p className="text-xs uppercase tracking-[0.12em] text-foreground/45">{item.label}</p>
-              <p className="mt-2 text-xl font-bold text-foreground">{item.value}</p>
-              <p className="mt-1 text-xs leading-5 text-foreground/55">{item.description}</p>
+            <article
+              key={item.label}
+              className="rounded-2xl border border-line/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9)_0%,rgba(237,243,239,0.78)_100%)] p-4 shadow-[0_10px_26px_rgba(20,33,29,0.06)]"
+            >
+              <p className="text-xs uppercase tracking-[0.12em] text-foreground/45">
+                {item.label}
+              </p>
+              <p className="mt-2 text-xl font-bold text-foreground">
+                {item.value}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-foreground/55">
+                {item.description}
+              </p>
             </article>
           ))}
         </div>

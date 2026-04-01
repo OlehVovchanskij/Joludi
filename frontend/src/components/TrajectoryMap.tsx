@@ -9,7 +9,10 @@ type TrajectoryMapProps = {
   activeIndex?: number;
 };
 
-export default function TrajectoryMap({ points, activeIndex }: TrajectoryMapProps) {
+export default function TrajectoryMap({
+  points,
+  activeIndex,
+}: TrajectoryMapProps) {
   const visiblePoints = useMemo(() => {
     if (activeIndex === undefined || activeIndex < 0) {
       return points;
@@ -35,8 +38,12 @@ export default function TrajectoryMap({ points, activeIndex }: TrajectoryMapProp
         OpenStreetMap route playback
       </div>
       <div className="absolute right-4 top-4 z-[500] flex gap-2 text-xs font-medium text-foreground/70">
-        <span className="rounded-full border border-line/70 bg-surface/90 px-3 py-1 shadow-lg backdrop-blur-md">Start</span>
-        <span className="rounded-full border border-line/70 bg-surface/90 px-3 py-1 shadow-lg backdrop-blur-md">Finish</span>
+        <span className="rounded-full border border-line/70 bg-surface/90 px-3 py-1 shadow-lg backdrop-blur-md">
+          Start
+        </span>
+        <span className="rounded-full border border-line/70 bg-surface/90 px-3 py-1 shadow-lg backdrop-blur-md">
+          Finish
+        </span>
       </div>
       <MapContainer bounds={bounds} scrollWheelZoom className="h-full w-full">
         <TileLayer
@@ -50,18 +57,30 @@ export default function TrajectoryMap({ points, activeIndex }: TrajectoryMapProp
         <CircleMarker
           center={startPoint}
           radius={7}
-          pathOptions={{ color: "#2563eb", fillColor: "#2563eb", fillOpacity: 1 }}
+          pathOptions={{
+            color: "#2563eb",
+            fillColor: "#2563eb",
+            fillOpacity: 1,
+          }}
         />
         <CircleMarker
           center={endPoint}
           radius={7}
-          pathOptions={{ color: "#dc2626", fillColor: "#dc2626", fillOpacity: 1 }}
+          pathOptions={{
+            color: "#dc2626",
+            fillColor: "#dc2626",
+            fillOpacity: 1,
+          }}
         />
         {activePoint && (
           <CircleMarker
             center={activePoint}
             radius={8}
-            pathOptions={{ color: "#c9723b", fillColor: "#c9723b", fillOpacity: 1 }}
+            pathOptions={{
+              color: "#c9723b",
+              fillColor: "#c9723b",
+              fillOpacity: 1,
+            }}
           />
         )}
       </MapContainer>

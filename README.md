@@ -46,6 +46,7 @@ docker compose up --build
 ```
 
 Сервіси:
+
 - Frontend: http://localhost:3000
 - Backend: http://localhost:8501
 

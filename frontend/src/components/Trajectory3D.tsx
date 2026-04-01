@@ -9,7 +9,10 @@ type Trajectory3DProps = {
   activePoint?: { east_m: number; north_m: number; up_m: number } | null;
 };
 
-export default function Trajectory3D({ figure, activePoint }: Trajectory3DProps) {
+export default function Trajectory3D({
+  figure,
+  activePoint,
+}: Trajectory3DProps) {
   if (!figure) {
     return (
       <div className="rounded-3xl border border-dashed border-line bg-surface-soft/70 p-6 text-sm text-foreground/60">
