@@ -1,9 +1,15 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from services.analyzer import analyze_log_bytes_async, parse_log_bytes_async
+from services.ai_summary import generate_flight_summary
 
 
 router = APIRouter(tags=["analysis"])
+
+
+class SummaryRequest(BaseModel):
+    analysis: dict
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -49,3 +55,8 @@ async def google_map_trajectory(file: UploadFile = File(...)) -> dict:
     file_bytes = await _read_upload(file)
     analysis_result = await analyze_log_bytes_async(file_bytes, filename=file.filename)
     return analysis_result["google_maps"]
+
+
+@router.post("/ai/summary")
+async def ai_summary(payload: SummaryRequest) -> dict:
+    return generate_flight_summary(payload.analysis)

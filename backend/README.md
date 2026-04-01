@@ -1,38 +1,45 @@
 # Drone Analyzer Backend
 
-FastAPI backend for parsing Ardupilot `.bin` flight logs, computing flight metrics, and converting GPS track points into a local ENU trajectory.
+FastAPI API для обробки Ardupilot логів, обчислення польотних метрик, 3D ENU траєкторії та генерації AI-підсумку.
 
-## Why this stack
+## Локальний запуск
 
-- `FastAPI` gives a small and fast API layer for file uploads and JSON responses.
-- `pymavlink` is the right parser for Ardupilot binary logs.
-- `pandas`, `numpy`, and `scipy` make the data preparation and numerical analysis straightforward.
-- `plotly` is used to generate a 3D trajectory visualization payload.
+```bash
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8501 --reload
+```
 
-## Run with Docker
+## Docker
 
 ```bash
 docker compose up --build
 ```
 
-The API will be available at `http://localhost:8501`.
+API доступне на `http://localhost:8501`.
 
 ## Endpoints
 
-- `GET /health` - basic service check.
-- `POST /api/parse` - parse GPS and IMU samples from an uploaded `.bin` file.
-- `POST /api/metrics` - compute mission metrics.
-- `POST /api/trajectory` - return ENU trajectory data and a Plotly figure payload.
-- `POST /api/analyze` - return the full analysis payload in one request.
-- `POST /api/map/google` - return Google Maps payload with points, encoded polyline, and static map URL.
+- `GET /health` - health-check.
+- `POST /api/parse` - розбір GPS/IMU повідомлень та службові поля (sampling/units).
+- `POST /api/metrics` - тільки метрики місії.
+- `POST /api/trajectory` - ENU траєкторія + Plotly + Google payload.
+- `POST /api/analyze` - повний payload за один запит.
+- `POST /api/map/google` - polyline/static URL для Google Maps.
+- `POST /api/ai/summary` - AI/heuristic текстовий висновок по результату аналізу.
 
-## Google Maps
+## Алгоритмічна база
 
-- Set `GOOGLE_MAPS_API_KEY` in environment variables to get authenticated Google Maps static URL output.
-- The API returns `google_maps.encoded_polyline` and `google_maps.points` that can be rendered in Google Maps JavaScript API.
+- Перетворення координат `WGS-84 -> ENU` виконується відносно стартової точки польоту.
+- Загальна дистанція рахується через формулу haversine для кожної пари GPS-точок.
+- Оцінка швидкості з профілю прискорення IMU базується на трапецієвидному інтегруванні.
 
-## Notes
+## AI Summary
 
-- The first GPS sample is used as the ENU origin.
-- Total distance is computed with the haversine formula.
-- Speed estimates from acceleration are integrated with the trapezoidal rule.
+- Якщо задано `OPENAI_API_KEY`, endpoint `/api/ai/summary` використовує OpenAI-compatible chat completions.
+- Без ключа повертається rule-based технічний висновок (fail-safe режим).
+
+Підтримувані змінні:
+
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
+- `OPENAI_MODEL` (default: `gpt-4o-mini`)
