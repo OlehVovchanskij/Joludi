@@ -40,7 +40,8 @@ def _numeric_or_none(value: Any) -> float | None:
 def _normalize_timestamp_seconds(data: dict[str, Any]) -> float | None:
     timestamp_value = _first_present_value(
         data,
-        ["TimeUS", "time_usec", "TimeMS", "time_boot_ms", "time_ms", "TimeS", "time_s"],
+        ["TimeUS", "time_usec", "TimeMS", "time_boot_ms",
+            "time_ms", "TimeS", "time_s"],
     )
     numeric_timestamp = _numeric_or_none(timestamp_value)
     if numeric_timestamp is None:
@@ -78,16 +79,21 @@ def _has_imu_fields(data: dict[str, Any]) -> bool:
 
 def _extract_gps_record(message_type: str, data: dict[str, Any]) -> dict[str, Any] | None:
     latitude = _numeric_or_none(_first_present_value(data, ["Lat", "lat"]))
-    longitude = _numeric_or_none(_first_present_value(data, ["Lng", "Lon", "lon"]))
+    longitude = _numeric_or_none(
+        _first_present_value(data, ["Lng", "Lon", "lon"]))
     altitude_m = _numeric_or_none(_first_present_value(data, ["Alt", "alt"]))
 
     if latitude is None or longitude is None or altitude_m is None:
         return None
 
-    horizontal_velocity = _numeric_or_none(_first_present_value(data, ["Spd", "Speed", "groundspeed"]))
-    velocity_north = _numeric_or_none(_first_present_value(data, ["VelN", "vn"]))
-    velocity_east = _numeric_or_none(_first_present_value(data, ["VelE", "ve"]))
-    velocity_down = _numeric_or_none(_first_present_value(data, ["VelD", "vd"]))
+    horizontal_velocity = _numeric_or_none(
+        _first_present_value(data, ["Spd", "Speed", "groundspeed"]))
+    velocity_north = _numeric_or_none(
+        _first_present_value(data, ["VelN", "vn"]))
+    velocity_east = _numeric_or_none(
+        _first_present_value(data, ["VelE", "ve"]))
+    velocity_down = _numeric_or_none(
+        _first_present_value(data, ["VelD", "vd"]))
     timestamp_s = _normalize_timestamp_seconds(data)
 
     if horizontal_velocity is None and velocity_north is not None and velocity_east is not None:
@@ -107,9 +113,12 @@ def _extract_gps_record(message_type: str, data: dict[str, Any]) -> dict[str, An
 
 
 def _extract_imu_record(message_type: str, data: dict[str, Any]) -> dict[str, Any] | None:
-    acceleration_x = _numeric_or_none(_first_present_value(data, ["AccX", "xacc", "ax"]))
-    acceleration_y = _numeric_or_none(_first_present_value(data, ["AccY", "yacc", "ay"]))
-    acceleration_z = _numeric_or_none(_first_present_value(data, ["AccZ", "zacc", "az"]))
+    acceleration_x = _numeric_or_none(
+        _first_present_value(data, ["AccX", "xacc", "ax"]))
+    acceleration_y = _numeric_or_none(
+        _first_present_value(data, ["AccY", "yacc", "ay"]))
+    acceleration_z = _numeric_or_none(
+        _first_present_value(data, ["AccZ", "zacc", "az"]))
     timestamp_s = _normalize_timestamp_seconds(data)
 
     if acceleration_x is None or acceleration_y is None or acceleration_z is None:
@@ -126,7 +135,8 @@ def _extract_imu_record(message_type: str, data: dict[str, Any]) -> dict[str, An
 
 
 def _sampling_frequency_hz(timestamp_series: pd.Series) -> float | None:
-    valid_timestamps = pd.to_numeric(timestamp_series, errors="coerce").dropna().sort_values()
+    valid_timestamps = pd.to_numeric(
+        timestamp_series, errors="coerce").dropna().sort_values()
     if len(valid_timestamps) < 2:
         return None
 
@@ -142,7 +152,8 @@ def _sampling_frequency_hz(timestamp_series: pd.Series) -> float | None:
 
 
 def _integrate_trapezoidal(times_s: pd.Series, values: pd.Series, initial_value: float = 0.0) -> np.ndarray:
-    valid_frame = pd.DataFrame({"time_s": times_s, "value": values}).dropna().sort_values("time_s")
+    valid_frame = pd.DataFrame(
+        {"time_s": times_s, "value": values}).dropna().sort_values("time_s")
     if valid_frame.empty:
         return np.array([], dtype=float)
 
@@ -203,7 +214,8 @@ def parse_log_bytes(file_bytes: bytes, filename: str | None = None) -> ParsedLog
         temp_path = Path(temp_file.name)
 
     try:
-        mavlog = mavutil.mavlink_connection(str(temp_path), dialect="ardupilotmega", robust_parsing=True)
+        mavlog = mavutil.mavlink_connection(
+            str(temp_path), dialect="ardupilotmega", robust_parsing=True)
 
         raw_records: list[dict[str, Any]] = []
         gps_records: list[dict[str, Any]] = []
@@ -244,7 +256,8 @@ def parse_log_bytes(file_bytes: bytes, filename: str | None = None) -> ParsedLog
 
         for frame in [raw_frame, gps_frame, imu_frame]:
             if not frame.empty and "timestamp_s" in frame.columns:
-                frame.sort_values("timestamp_s", inplace=True, ignore_index=True)
+                frame.sort_values(
+                    "timestamp_s", inplace=True, ignore_index=True)
 
         return ParsedLogData(filename=filename, raw_messages=raw_frame, gps=gps_frame, imu=imu_frame)
     finally:
@@ -356,7 +369,8 @@ def _build_google_maps_payload(trajectory_frame: pd.DataFrame) -> dict[str, Any]
         )
 
     points_for_map = _downsample_points(points)
-    polyline_points = [(point["lat"], point["lng"]) for point in points_for_map]
+    polyline_points = [(point["lat"], point["lng"])
+                       for point in points_for_map]
     encoded_polyline = _encode_polyline(polyline_points)
 
     first_point = points_for_map[0]
@@ -380,11 +394,13 @@ def _build_google_maps_payload(trajectory_frame: pd.DataFrame) -> dict[str, Any]
     for key, value in static_map_params.items():
         if isinstance(value, list):
             for list_item in value:
-                query_parts.append(f"{key}={urllib.parse.quote_plus(str(list_item))}")
+                query_parts.append(
+                    f"{key}={urllib.parse.quote_plus(str(list_item))}")
         else:
             query_parts.append(f"{key}={urllib.parse.quote_plus(str(value))}")
 
-    static_map_url = "https://maps.googleapis.com/maps/api/staticmap?" + "&".join(query_parts)
+    static_map_url = "https://maps.googleapis.com/maps/api/staticmap?" + \
+        "&".join(query_parts)
 
     return {
         "center": {
@@ -417,10 +433,14 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
             "parsed": parsed_log.to_api_payload(),
         }
 
-    gps_frame["timestamp_s"] = pd.to_numeric(gps_frame["timestamp_s"], errors="coerce")
-    gps_frame["altitude_m"] = pd.to_numeric(gps_frame["altitude_m"], errors="coerce")
-    gps_frame["latitude_deg"] = pd.to_numeric(gps_frame["latitude_deg"], errors="coerce")
-    gps_frame["longitude_deg"] = pd.to_numeric(gps_frame["longitude_deg"], errors="coerce")
+    gps_frame["timestamp_s"] = pd.to_numeric(
+        gps_frame["timestamp_s"], errors="coerce")
+    gps_frame["altitude_m"] = pd.to_numeric(
+        gps_frame["altitude_m"], errors="coerce")
+    gps_frame["latitude_deg"] = pd.to_numeric(
+        gps_frame["latitude_deg"], errors="coerce")
+    gps_frame["longitude_deg"] = pd.to_numeric(
+        gps_frame["longitude_deg"], errors="coerce")
 
     gps_frame = gps_frame.dropna(subset=["timestamp_s", "latitude_deg", "longitude_deg", "altitude_m"]).sort_values(
         "timestamp_s",
@@ -450,7 +470,8 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
 
         speed_mps = _numeric_or_none(row.get("horizontal_velocity_mps"))
         if speed_mps is None and previous_row is not None:
-            delta_time = float(row["timestamp_s"]) - float(previous_row["timestamp_s"])
+            delta_time = float(row["timestamp_s"]) - \
+                float(previous_row["timestamp_s"])
             if delta_time > 0:
                 segment_distance_m = haversine_distance_m(
                     float(previous_row["latitude_deg"]),
@@ -465,7 +486,8 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
             speed_mps = 0.0
 
         if previous_row is not None:
-            delta_time = float(row["timestamp_s"]) - float(previous_row["timestamp_s"])
+            delta_time = float(row["timestamp_s"]) - \
+                float(previous_row["timestamp_s"])
             if delta_time > 0:
                 segment_distance_m = haversine_distance_m(
                     float(previous_row["latitude_deg"]),
@@ -475,7 +497,8 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
                 )
                 segment_distances_m.append(segment_distance_m)
                 horizontal_speeds_mps.append(segment_distance_m / delta_time)
-                vertical_speeds_mps.append((float(row["altitude_m"]) - float(previous_row["altitude_m"])) / delta_time)
+                vertical_speeds_mps.append(
+                    (float(row["altitude_m"]) - float(previous_row["altitude_m"])) / delta_time)
 
         trajectory_records.append(
             {
@@ -496,11 +519,15 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
 
     imu_magnitude = _safe_series(imu_frame, "acceleration_magnitude_mps2")
     imu_timestamps = _safe_series(imu_frame, "timestamp_s")
-    estimated_velocity_from_acceleration = _integrate_trapezoidal(imu_timestamps, imu_magnitude, initial_value=0.0)
+    estimated_velocity_from_acceleration = _integrate_trapezoidal(
+        imu_timestamps, imu_magnitude, initial_value=0.0)
 
-    altitude_gain_m = float(gps_frame["altitude_m"].max() - gps_frame.iloc[0]["altitude_m"])
-    total_distance_m = float(np.sum(segment_distances_m)) if segment_distances_m else 0.0
-    duration_s = float(gps_frame.iloc[-1]["timestamp_s"] - gps_frame.iloc[0]["timestamp_s"])
+    altitude_gain_m = float(
+        gps_frame["altitude_m"].max() - gps_frame.iloc[0]["altitude_m"])
+    total_distance_m = float(np.sum(segment_distances_m)
+                             ) if segment_distances_m else 0.0
+    duration_s = float(
+        gps_frame.iloc[-1]["timestamp_s"] - gps_frame.iloc[0]["timestamp_s"])
 
     metrics = {
         "duration_s": duration_s,

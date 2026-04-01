@@ -27,7 +27,8 @@ def haversine_distance_m(
 
     half_chord = (
         sin(latitude_delta / 2.0) ** 2
-        + cos(latitude_1_rad) * cos(latitude_2_rad) * sin(longitude_delta / 2.0) ** 2
+        + cos(latitude_1_rad) * cos(latitude_2_rad) *
+        sin(longitude_delta / 2.0) ** 2
     )
     central_angle = 2.0 * atan2(sqrt(half_chord), sqrt(1.0 - half_chord))
     return EARTH_RADIUS_M * central_angle
