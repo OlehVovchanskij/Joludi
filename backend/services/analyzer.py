@@ -4,18 +4,44 @@ import asyncio
 import json
 import math
 import os
-import tempfile
+import struct
 import urllib.parse
-from dataclasses import dataclass
-from pathlib import Path
+from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from pymavlink import mavutil
 
 from services.coordinates import GeoPoint, haversine_distance_m, wgs84_to_enu
+
+
+MAGIC_HEADER_BYTE_1 = 0xA3
+MAGIC_HEADER_BYTE_2 = 0x95
+FMT_MESSAGE_TYPE = 0x80
+
+FIELD_SPECS: dict[str, tuple[str, int]] = {
+    "b": ("b", 1),
+    "B": ("B", 1),
+    "h": ("h", 2),
+    "H": ("H", 2),
+    "i": ("i", 4),
+    "I": ("I", 4),
+    "q": ("q", 8),
+    "Q": ("Q", 8),
+    "f": ("f", 4),
+    "d": ("d", 8),
+    "n": ("4s", 4),
+    "N": ("16s", 16),
+    "Z": ("64s", 64),
+    "L": ("i", 4),
+    "e": ("i", 4),
+    "E": ("I", 4),
+    "c": ("h", 2),
+    "C": ("H", 2),
+    "M": ("B", 1),
+}
 
 
 def _first_present_value(data: dict[str, Any], keys: list[str]) -> Any:
@@ -37,142 +63,231 @@ def _numeric_or_none(value: Any) -> float | None:
     return numeric_value
 
 
-def _normalize_timestamp_seconds(data: dict[str, Any]) -> float | None:
-    timestamp_value = _first_present_value(
-        data,
-        ["TimeUS", "time_usec", "TimeMS", "time_boot_ms",
-            "time_ms", "TimeS", "time_s"],
+def _decode_ascii(raw_bytes: bytes) -> str:
+    return raw_bytes.decode("ascii", errors="ignore").split("\x00", 1)[0].strip()
+
+
+@dataclass(frozen=True)
+class MessageDefinition:
+    type_id: int
+    length: int
+    name: str
+    format_codes: list[str]
+    columns: list[str]
+
+
+def _parse_fmt_definition(buffer: bytes, offset: int) -> tuple[MessageDefinition | None, int]:
+    try:
+        defined_type_id, total_length = struct.unpack_from(
+            "<BB", buffer, offset + 3)
+    except struct.error:
+        return None, 1
+
+    if total_length <= 3:
+        return None, 1
+
+    if offset + total_length > len(buffer):
+        return None, 1
+
+    name_raw = buffer[offset + 5: offset + 9]
+    format_raw = buffer[offset + 9: offset + 25]
+    columns_raw = buffer[offset + 25: offset + 89]
+
+    message_name = _decode_ascii(name_raw)
+    format_string = _decode_ascii(format_raw)
+    columns_text = _decode_ascii(columns_raw)
+
+    if not message_name or not format_string:
+        return None, max(total_length, 1)
+
+    format_codes = list(format_string)
+    if any(code not in FIELD_SPECS for code in format_codes):
+        return None, max(total_length, 1)
+
+    expected_length = 3 + sum(FIELD_SPECS[code][1] for code in format_codes)
+    if expected_length > total_length:
+        return None, max(total_length, 1)
+
+    columns = [column.strip()
+               for column in columns_text.split(",") if column.strip()]
+
+    definition = MessageDefinition(
+        type_id=defined_type_id,
+        length=total_length,
+        name=message_name,
+        format_codes=format_codes,
+        columns=columns,
     )
-    numeric_timestamp = _numeric_or_none(timestamp_value)
-    if numeric_timestamp is None:
-        return None
-
-    if numeric_timestamp >= 1_000_000_000_000:
-        return numeric_timestamp / 1_000_000.0
-    if numeric_timestamp >= 1_000_000_000:
-        return numeric_timestamp / 1_000.0
-    if numeric_timestamp >= 1_000_000:
-        return numeric_timestamp / 1_000_000.0
-    return numeric_timestamp
+    return definition, total_length
 
 
-def _has_gps_fields(data: dict[str, Any]) -> bool:
-    return any(key in data for key in ["Lat", "Lng", "Lon", "Alt", "lat", "lon", "alt"])
+def _apply_unit_conversion(field_code: str, column_name: str, value: Any) -> Any:
+    if isinstance(value, bytes):
+        return _decode_ascii(value)
+
+    numeric_value = _numeric_or_none(value)
+    if numeric_value is None:
+        return value
+
+    if field_code == "L":
+        numeric_value /= 1e7
+    elif field_code in {"c", "C", "e", "E"}:
+        numeric_value /= 1e2
+
+    if column_name == "TimeUS":
+        numeric_value /= 1e6
+
+    return numeric_value
 
 
-def _has_imu_fields(data: dict[str, Any]) -> bool:
-    return any(
-        key in data
-        for key in [
-            "AccX",
-            "AccY",
-            "AccZ",
-            "xacc",
-            "yacc",
-            "zacc",
-            "ax",
-            "ay",
-            "az",
-        ]
-    )
-
-
-def _extract_gps_record(message_type: str, data: dict[str, Any]) -> dict[str, Any] | None:
-    latitude = _numeric_or_none(_first_present_value(data, ["Lat", "lat"]))
-    longitude = _numeric_or_none(
-        _first_present_value(data, ["Lng", "Lon", "lon"]))
-    altitude_m = _numeric_or_none(_first_present_value(data, ["Alt", "alt"]))
-
-    if latitude is None or longitude is None or altitude_m is None:
-        return None
-
-    horizontal_velocity = _numeric_or_none(
-        _first_present_value(data, ["Spd", "Speed", "groundspeed"]))
-    velocity_north = _numeric_or_none(
-        _first_present_value(data, ["VelN", "vn"]))
-    velocity_east = _numeric_or_none(
-        _first_present_value(data, ["VelE", "ve"]))
-    velocity_down = _numeric_or_none(
-        _first_present_value(data, ["VelD", "vd"]))
-    timestamp_s = _normalize_timestamp_seconds(data)
-
-    if horizontal_velocity is None and velocity_north is not None and velocity_east is not None:
-        horizontal_velocity = float(np.hypot(velocity_north, velocity_east))
-
-    return {
-        "message_type": message_type,
-        "timestamp_s": timestamp_s,
-        "latitude_deg": latitude,
-        "longitude_deg": longitude,
-        "altitude_m": altitude_m,
-        "horizontal_velocity_mps": horizontal_velocity,
-        "velocity_north_mps": velocity_north,
-        "velocity_east_mps": velocity_east,
-        "velocity_down_mps": velocity_down,
+def _decode_message_row(buffer: bytes, offset: int, definition: MessageDefinition) -> dict[str, Any] | None:
+    row: dict[str, Any] = {
+        "_message_type_id": definition.type_id,
+        "_message_name": definition.name,
     }
 
+    cursor = offset + 3
+    for index, field_code in enumerate(definition.format_codes):
+        column_name = (
+            definition.columns[index]
+            if index < len(definition.columns) and definition.columns[index]
+            else f"field_{index}"
+        )
 
-def _extract_imu_record(message_type: str, data: dict[str, Any]) -> dict[str, Any] | None:
-    acceleration_x = _numeric_or_none(
-        _first_present_value(data, ["AccX", "xacc", "ax"]))
-    acceleration_y = _numeric_or_none(
-        _first_present_value(data, ["AccY", "yacc", "ay"]))
-    acceleration_z = _numeric_or_none(
-        _first_present_value(data, ["AccZ", "zacc", "az"]))
-    timestamp_s = _normalize_timestamp_seconds(data)
+        struct_token, field_size = FIELD_SPECS[field_code]
 
-    if acceleration_x is None or acceleration_y is None or acceleration_z is None:
-        return None
+        try:
+            (raw_value,) = struct.unpack_from(
+                f"<{struct_token}", buffer, cursor)
+        except struct.error:
+            return None
 
-    return {
-        "message_type": message_type,
-        "timestamp_s": timestamp_s,
-        "acceleration_x_mps2": acceleration_x,
-        "acceleration_y_mps2": acceleration_y,
-        "acceleration_z_mps2": acceleration_z,
-        "acceleration_magnitude_mps2": float(np.linalg.norm([acceleration_x, acceleration_y, acceleration_z])),
-    }
+        row[column_name] = _apply_unit_conversion(
+            field_code, column_name, raw_value)
+        cursor += field_size
 
-
-def _sampling_frequency_hz(timestamp_series: pd.Series) -> float | None:
-    valid_timestamps = pd.to_numeric(
-        timestamp_series, errors="coerce").dropna().sort_values()
-    if len(valid_timestamps) < 2:
-        return None
-
-    deltas = valid_timestamps.diff().dropna()
-    positive_deltas = deltas[deltas > 0]
-    if positive_deltas.empty:
-        return None
-
-    median_delta = float(positive_deltas.median())
-    if median_delta <= 0:
-        return None
-    return 1.0 / median_delta
+    return row
 
 
-def _integrate_trapezoidal(times_s: pd.Series, values: pd.Series, initial_value: float = 0.0) -> np.ndarray:
-    valid_frame = pd.DataFrame(
-        {"time_s": times_s, "value": values}).dropna().sort_values("time_s")
-    if valid_frame.empty:
-        return np.array([], dtype=float)
+def _parse_dataflash_messages(
+    file_bytes: bytes,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[int, MessageDefinition], list[dict[str, Any]]]:
+    rows_by_message: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    definitions: dict[int, MessageDefinition] = {}
+    raw_messages: list[dict[str, Any]] = []
 
-    integrated_values = [float(initial_value)]
-    previous_time = float(valid_frame.iloc[0]["time_s"])
-    previous_value = float(valid_frame.iloc[0]["value"])
+    index = 0
+    data_length = len(file_bytes)
 
-    for _, row in valid_frame.iloc[1:].iterrows():
-        current_time = float(row["time_s"])
-        current_value = float(row["value"])
-        delta_time = current_time - previous_time
-        if delta_time < 0:
+    while index <= data_length - 3:
+        if (
+            file_bytes[index] != MAGIC_HEADER_BYTE_1
+            or file_bytes[index + 1] != MAGIC_HEADER_BYTE_2
+        ):
+            index += 1
             continue
-        delta_value = 0.5 * (previous_value + current_value) * delta_time
-        integrated_values.append(integrated_values[-1] + delta_value)
-        previous_time = current_time
-        previous_value = current_value
 
-    return np.asarray(integrated_values, dtype=float)
+        message_type_id = file_bytes[index + 2]
+
+        if message_type_id == FMT_MESSAGE_TYPE:
+            definition, frame_length = _parse_fmt_definition(file_bytes, index)
+            if definition is not None:
+                definitions[definition.type_id] = definition
+                raw_messages.append(
+                    {
+                        "message_type": "FMT",
+                        "timestamp_s": None,
+                        "defined_type_id": definition.type_id,
+                        "name": definition.name,
+                        "length": definition.length,
+                    }
+                )
+                index += max(frame_length, 1)
+                continue
+
+            index += 1
+            continue
+
+        definition = definitions.get(message_type_id)
+        if definition is None:
+            index += 1
+            continue
+
+        if definition.length <= 3 or index + definition.length > data_length:
+            index += 1
+            continue
+
+        row = _decode_message_row(file_bytes, index, definition)
+        if row is None:
+            index += 1
+            continue
+
+        rows_by_message[definition.name].append(row)
+        raw_messages.append(
+            {
+                "message_type": definition.name,
+                "timestamp_s": _numeric_or_none(row.get("TimeUS")),
+            }
+        )
+        index += definition.length
+
+    return rows_by_message, definitions, raw_messages
+
+
+def _frame_from_rows(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows)
+    if not frame.empty and "TimeUS" in frame.columns:
+        frame["TimeUS"] = pd.to_numeric(frame["TimeUS"], errors="coerce")
+        frame.sort_values("TimeUS", inplace=True, ignore_index=True)
+    return frame
+
+
+def _merge_frames(
+    frames_by_name: dict[str, pd.DataFrame],
+    names: list[str] | None = None,
+    prefixes: list[str] | None = None,
+) -> pd.DataFrame:
+    selected_frames: list[pd.DataFrame] = []
+
+    for message_name, frame in frames_by_name.items():
+        if frame.empty:
+            continue
+
+        include = False
+        if names and message_name in names:
+            include = True
+        if prefixes and any(message_name.startswith(prefix) for prefix in prefixes):
+            include = True
+
+        if include:
+            selected_frames.append(frame.copy())
+
+    if not selected_frames:
+        return pd.DataFrame()
+
+    merged_frame = pd.concat(selected_frames, ignore_index=True)
+    if "TimeUS" in merged_frame.columns:
+        merged_frame["TimeUS"] = pd.to_numeric(
+            merged_frame["TimeUS"], errors="coerce")
+        merged_frame.sort_values("TimeUS", inplace=True, ignore_index=True)
+    return merged_frame
+
+
+def _sampling_frequency_hz(time_series: pd.Series) -> float | None:
+    time_values = pd.to_numeric(
+        time_series, errors="coerce").dropna().to_numpy(dtype=float)
+    if len(time_values) < 2:
+        return None
+
+    deltas = np.diff(np.sort(time_values))
+    deltas = deltas[deltas > 0]
+    if deltas.size == 0:
+        return None
+
+    mean_delta = float(np.mean(deltas))
+    if mean_delta <= 0:
+        return None
+    return 1.0 / mean_delta
 
 
 @dataclass
@@ -181,98 +296,155 @@ class ParsedLogData:
     raw_messages: pd.DataFrame
     gps: pd.DataFrame
     imu: pd.DataFrame
+    baro: pd.DataFrame
+    message_frames: dict[str, pd.DataFrame] = field(default_factory=dict)
+    definitions: dict[int, MessageDefinition] = field(default_factory=dict)
 
     def to_api_payload(self) -> dict[str, Any]:
+        sampling_by_message: dict[str, float | None] = {}
+        for message_name, frame in self.message_frames.items():
+            if "TimeUS" in frame.columns and not frame.empty:
+                sampling_by_message[message_name] = _sampling_frequency_hz(
+                    frame["TimeUS"])
+
         return {
             "filename": self.filename,
             "message_count": int(len(self.raw_messages)),
+            "message_types": sorted(self.message_frames.keys()),
+            "sampling_hz_by_message": sampling_by_message,
             "gps_samples": self.gps.to_dict(orient="records"),
             "imu_samples": self.imu.to_dict(orient="records"),
-            "sampling_hz": {
-                "gps": _sampling_frequency_hz(self.gps["timestamp_s"]) if not self.gps.empty else None,
-                "imu": _sampling_frequency_hz(self.imu["timestamp_s"]) if not self.imu.empty else None,
-            },
+            "baro_samples": self.baro.to_dict(orient="records"),
             "units": {
-                "gps": {
-                    "latitude_deg": "deg",
-                    "longitude_deg": "deg",
-                    "altitude_m": "m",
-                    "horizontal_velocity_mps": "m/s",
-                },
-                "imu": {
-                    "acceleration_x_mps2": "m/s^2",
-                    "acceleration_y_mps2": "m/s^2",
-                    "acceleration_z_mps2": "m/s^2",
-                },
+                "TimeUS": "seconds",
+                "Lat": "deg",
+                "Lng": "deg",
+                "Alt": "m",
+                "Spd": "m/s",
+                "VZ": "m/s",
+                "CRt": "m/s",
+                "AccX": "m/s^2",
+                "AccY": "m/s^2",
+                "AccZ": "m/s^2",
+                "GyrX": "rad/s",
+                "GyrY": "rad/s",
+                "GyrZ": "rad/s",
             },
         }
 
 
 def parse_log_bytes(file_bytes: bytes, filename: str | None = None) -> ParsedLogData:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename or "flight.bin").suffix or ".bin") as temp_file:
-        temp_file.write(file_bytes)
-        temp_path = Path(temp_file.name)
+    rows_by_message, definitions, raw_records = _parse_dataflash_messages(
+        file_bytes)
+    frames_by_name = {message_name: _frame_from_rows(
+        rows) for message_name, rows in rows_by_message.items()}
 
-    try:
-        mavlog = mavutil.mavlink_connection(
-            str(temp_path), dialect="ardupilotmega", robust_parsing=True)
+    gps_frame = _merge_frames(frames_by_name, prefixes=["GPS"])
+    imu_frame = _merge_frames(frames_by_name, names=["IMU", "IMU2", "IMU3"])
+    baro_frame = _merge_frames(frames_by_name, prefixes=["BARO"])
+    raw_frame = _frame_from_rows(raw_records)
 
-        raw_records: list[dict[str, Any]] = []
-        gps_records: list[dict[str, Any]] = []
-        imu_records: list[dict[str, Any]] = []
-
-        while True:
-            message = mavlog.recv_match(blocking=False)
-            if message is None:
-                break
-
-            message_type = message.get_type()
-            if message_type in {"BAD_DATA", "UNKNOWN"}:
-                continue
-
-            message_data = message.to_dict()
-            timestamp_s = _normalize_timestamp_seconds(message_data)
-            raw_records.append(
-                {
-                    "message_type": message_type,
-                    "timestamp_s": timestamp_s,
-                    **{key: value for key, value in message_data.items() if key != "mavpackettype"},
-                }
-            )
-
-            if _has_gps_fields(message_data):
-                gps_record = _extract_gps_record(message_type, message_data)
-                if gps_record is not None:
-                    gps_records.append(gps_record)
-
-            if _has_imu_fields(message_data):
-                imu_record = _extract_imu_record(message_type, message_data)
-                if imu_record is not None:
-                    imu_records.append(imu_record)
-
-        raw_frame = pd.DataFrame(raw_records)
-        gps_frame = pd.DataFrame(gps_records)
-        imu_frame = pd.DataFrame(imu_records)
-
-        for frame in [raw_frame, gps_frame, imu_frame]:
-            if not frame.empty and "timestamp_s" in frame.columns:
-                frame.sort_values(
-                    "timestamp_s", inplace=True, ignore_index=True)
-
-        return ParsedLogData(filename=filename, raw_messages=raw_frame, gps=gps_frame, imu=imu_frame)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    return ParsedLogData(
+        filename=filename,
+        raw_messages=raw_frame,
+        gps=gps_frame,
+        imu=imu_frame,
+        baro=baro_frame,
+        message_frames=frames_by_name,
+        definitions=definitions,
+    )
 
 
-def _safe_series(frame: pd.DataFrame, column_name: str) -> pd.Series:
-    if frame.empty or column_name not in frame.columns:
-        return pd.Series(dtype=float)
-    return pd.to_numeric(frame[column_name], errors="coerce")
+def _safe_series(frame: pd.DataFrame, column_names: list[str]) -> pd.Series:
+    for column_name in column_names:
+        if column_name in frame.columns:
+            return pd.to_numeric(frame[column_name], errors="coerce")
+    return pd.Series(dtype=float)
+
+
+def _build_trajectory_frame(gps_frame: pd.DataFrame) -> pd.DataFrame:
+    if gps_frame.empty:
+        return pd.DataFrame()
+
+    latitude_series = _safe_series(gps_frame, ["Lat", "latitude_deg", "lat"])
+    longitude_series = _safe_series(
+        gps_frame, ["Lng", "Lon", "longitude_deg", "lon"])
+    altitude_series = _safe_series(gps_frame, ["Alt", "altitude_m", "alt"])
+    time_series = _safe_series(gps_frame, ["TimeUS", "timestamp_s"])
+    gps_speed_series = _safe_series(gps_frame, ["Spd", "Speed", "groundspeed"])
+
+    valid_frame = pd.DataFrame(
+        {
+            "timestamp_s": time_series,
+            "latitude_deg": latitude_series,
+            "longitude_deg": longitude_series,
+            "altitude_m": altitude_series,
+            "gps_speed_mps": gps_speed_series,
+        }
+    ).dropna(subset=["timestamp_s", "latitude_deg", "longitude_deg", "altitude_m"])
+
+    if valid_frame.empty:
+        return pd.DataFrame()
+
+    valid_frame.sort_values("timestamp_s", inplace=True, ignore_index=True)
+    origin = GeoPoint(
+        latitude=float(valid_frame.iloc[0]["latitude_deg"]),
+        longitude=float(valid_frame.iloc[0]["longitude_deg"]),
+        altitude_m=float(valid_frame.iloc[0]["altitude_m"]),
+    )
+
+    records: list[dict[str, Any]] = []
+    previous_row: pd.Series | None = None
+    for _, row in valid_frame.iterrows():
+        east_m, north_m, up_m = wgs84_to_enu(
+            latitude=float(row["latitude_deg"]),
+            longitude=float(row["longitude_deg"]),
+            altitude_m=float(row["altitude_m"]),
+            origin=origin,
+        )
+
+        speed_mps = _numeric_or_none(row.get("gps_speed_mps"))
+        if speed_mps is None and previous_row is not None:
+            delta_time = float(row["timestamp_s"] -
+                               previous_row["timestamp_s"])
+            if delta_time > 0:
+                segment_distance = haversine_distance_m(
+                    float(previous_row["latitude_deg"]),
+                    float(previous_row["longitude_deg"]),
+                    float(row["latitude_deg"]),
+                    float(row["longitude_deg"]),
+                )
+                speed_mps = segment_distance / delta_time
+            else:
+                speed_mps = 0.0
+        elif speed_mps is None:
+            speed_mps = 0.0
+
+        records.append(
+            {
+                "timestamp_s": float(row["timestamp_s"]),
+                "latitude_deg": float(row["latitude_deg"]),
+                "longitude_deg": float(row["longitude_deg"]),
+                "altitude_m": float(row["altitude_m"]),
+                "east_m": east_m,
+                "north_m": north_m,
+                "up_m": up_m,
+                "speed_mps": float(speed_mps),
+            }
+        )
+        previous_row = row
+
+    return pd.DataFrame(records)
 
 
 def _build_plotly_figure(trajectory_frame: pd.DataFrame) -> dict[str, Any]:
     if trajectory_frame.empty:
         return go.Figure().to_dict()
+
+    use_speed_coloring = trajectory_frame["speed_mps"].notna().any()
+    color_series = trajectory_frame["speed_mps"] if use_speed_coloring else trajectory_frame["timestamp_s"]
+    colorscale = "Viridis" if use_speed_coloring else "Plasma"
+    colorbar_title = "Speed (m/s)" if use_speed_coloring else "Time (s)"
 
     figure = go.Figure()
     figure.add_trace(
@@ -282,22 +454,46 @@ def _build_plotly_figure(trajectory_frame: pd.DataFrame) -> dict[str, Any]:
             z=trajectory_frame["up_m"],
             mode="lines+markers",
             marker={
-                "size": 4,
-                "color": trajectory_frame["speed_mps"],
-                "colorscale": "Viridis",
+                "size": 3,
+                "color": color_series,
+                "colorscale": colorscale,
                 "showscale": True,
-                "colorbar": {"title": "Speed, m/s"},
+                "colorbar": {"title": colorbar_title},
             },
-            line={"width": 4, "color": "rgba(50, 50, 50, 0.5)"},
-            name="Trajectory",
+            line={"width": 4, "color": "rgba(40, 40, 40, 0.45)"},
+            name="Flight Path",
         )
     )
+
+    start = trajectory_frame.iloc[0]
+    end = trajectory_frame.iloc[-1]
+    figure.add_trace(
+        go.Scatter3d(
+            x=[float(start["east_m"])],
+            y=[float(start["north_m"])],
+            z=[float(start["up_m"])],
+            mode="markers",
+            marker={"size": 7, "color": "green"},
+            name="Start",
+        )
+    )
+    figure.add_trace(
+        go.Scatter3d(
+            x=[float(end["east_m"])],
+            y=[float(end["north_m"])],
+            z=[float(end["up_m"])],
+            mode="markers",
+            marker={"size": 7, "color": "red"},
+            name="End",
+        )
+    )
+
     figure.update_layout(
         title="Drone trajectory in ENU coordinates",
         scene={
-            "xaxis_title": "East, m",
-            "yaxis_title": "North, m",
-            "zaxis_title": "Up, m",
+            "xaxis_title": "East (m)",
+            "yaxis_title": "North (m)",
+            "zaxis_title": "Altitude (m)",
         },
         margin={"l": 0, "r": 0, "t": 40, "b": 0},
     )
@@ -305,33 +501,26 @@ def _build_plotly_figure(trajectory_frame: pd.DataFrame) -> dict[str, Any]:
 
 
 def _encode_polyline(points: list[tuple[float, float]]) -> str:
-    """Encode points with Google's polyline algorithm format."""
-
     def _encode_value(value: int) -> str:
-        encoded_chunk = ""
+        encoded = ""
         value = ~(value << 1) if value < 0 else (value << 1)
         while value >= 0x20:
-            encoded_chunk += chr((0x20 | (value & 0x1F)) + 63)
+            encoded += chr((0x20 | (value & 0x1F)) + 63)
             value >>= 5
-        encoded_chunk += chr(value + 63)
-        return encoded_chunk
+        encoded += chr(value + 63)
+        return encoded
 
     result = ""
-    previous_latitude = 0
-    previous_longitude = 0
+    previous_lat = 0
+    previous_lng = 0
 
     for latitude, longitude in points:
         latitude_scaled = int(round(latitude * 1e5))
         longitude_scaled = int(round(longitude * 1e5))
-
-        delta_latitude = latitude_scaled - previous_latitude
-        delta_longitude = longitude_scaled - previous_longitude
-
-        result += _encode_value(delta_latitude)
-        result += _encode_value(delta_longitude)
-
-        previous_latitude = latitude_scaled
-        previous_longitude = longitude_scaled
+        result += _encode_value(latitude_scaled - previous_lat)
+        result += _encode_value(longitude_scaled - previous_lng)
+        previous_lat = latitude_scaled
+        previous_lng = longitude_scaled
 
     return result
 
@@ -356,49 +545,45 @@ def _build_google_maps_payload(trajectory_frame: pd.DataFrame) -> dict[str, Any]
             "api_key_configured": bool(os.getenv("GOOGLE_MAPS_API_KEY")),
         }
 
-    points: list[dict[str, float]] = []
-    for _, row in trajectory_frame.iterrows():
-        points.append(
-            {
-                "lat": float(row["latitude_deg"]),
-                "lng": float(row["longitude_deg"]),
-                "altitude_m": float(row["altitude_m"]),
-                "timestamp_s": float(row["timestamp_s"]),
-                "speed_mps": float(row["speed_mps"]),
-            }
-        )
+    points = [
+        {
+            "lat": float(row["latitude_deg"]),
+            "lng": float(row["longitude_deg"]),
+            "altitude_m": float(row["altitude_m"]),
+            "timestamp_s": float(row["timestamp_s"]),
+            "speed_mps": float(row["speed_mps"]),
+        }
+        for _, row in trajectory_frame.iterrows()
+    ]
 
     points_for_map = _downsample_points(points)
-    polyline_points = [(point["lat"], point["lng"])
-                       for point in points_for_map]
-    encoded_polyline = _encode_polyline(polyline_points)
+    encoded_polyline = _encode_polyline(
+        [(point["lat"], point["lng"]) for point in points_for_map])
 
-    first_point = points_for_map[0]
-    last_point = points_for_map[-1]
-
-    static_map_params = {
+    start = points_for_map[0]
+    end = points_for_map[-1]
+    params: dict[str, Any] = {
         "size": "1200x700",
         "maptype": "satellite",
         "path": f"color:0x00ff00ff|weight:4|enc:{encoded_polyline}",
         "markers": [
-            f"color:green|label:S|{first_point['lat']},{first_point['lng']}",
-            f"color:red|label:E|{last_point['lat']},{last_point['lng']}",
+            f"color:green|label:S|{start['lat']},{start['lng']}",
+            f"color:red|label:E|{end['lat']},{end['lng']}",
         ],
     }
 
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if api_key:
-        static_map_params["key"] = api_key
+        params["key"] = api_key
 
     query_parts: list[str] = []
-    for key, value in static_map_params.items():
+    for key, value in params.items():
         if isinstance(value, list):
-            for list_item in value:
+            for item in value:
                 query_parts.append(
-                    f"{key}={urllib.parse.quote_plus(str(list_item))}")
+                    f"{key}={urllib.parse.quote_plus(str(item))}")
         else:
             query_parts.append(f"{key}={urllib.parse.quote_plus(str(value))}")
-
     static_map_url = "https://maps.googleapis.com/maps/api/staticmap?" + \
         "&".join(query_parts)
 
@@ -407,8 +592,8 @@ def _build_google_maps_payload(trajectory_frame: pd.DataFrame) -> dict[str, Any]
             "lat": float(points_for_map[len(points_for_map) // 2]["lat"]),
             "lng": float(points_for_map[len(points_for_map) // 2]["lng"]),
         },
-        "start": {"lat": float(first_point["lat"]), "lng": float(first_point["lng"])},
-        "end": {"lat": float(last_point["lat"]), "lng": float(last_point["lng"])},
+        "start": {"lat": float(start["lat"]), "lng": float(start["lng"])},
+        "end": {"lat": float(end["lat"]), "lng": float(end["lng"])},
         "points": points_for_map,
         "encoded_polyline": encoded_polyline,
         "static_map_url": static_map_url,
@@ -416,128 +601,172 @@ def _build_google_maps_payload(trajectory_frame: pd.DataFrame) -> dict[str, Any]
     }
 
 
-def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[str, Any]:
-    parsed_log = parse_log_bytes(file_bytes, filename=filename)
-    gps_frame = parsed_log.gps.copy()
-    imu_frame = parsed_log.imu.copy()
-
-    if gps_frame.empty:
+def _compute_imu_velocity_metrics(imu_frame: pd.DataFrame) -> dict[str, Any]:
+    if imu_frame.empty:
         return {
-            "filename": filename,
-            "message_count": int(len(parsed_log.raw_messages)),
-            "metrics": {
-                "error": "No GPS samples found in the log file.",
-            },
-            "trajectory_enu": [],
-            "plotly_figure": go.Figure().to_dict(),
-            "parsed": parsed_log.to_api_payload(),
+            "vx": np.array([], dtype=float),
+            "vy": np.array([], dtype=float),
+            "vz": np.array([], dtype=float),
+            "max_horizontal_speed_mps": 0.0,
+            "max_acceleration_mps2": 0.0,
         }
 
-    gps_frame["timestamp_s"] = pd.to_numeric(
-        gps_frame["timestamp_s"], errors="coerce")
-    gps_frame["altitude_m"] = pd.to_numeric(
-        gps_frame["altitude_m"], errors="coerce")
-    gps_frame["latitude_deg"] = pd.to_numeric(
-        gps_frame["latitude_deg"], errors="coerce")
-    gps_frame["longitude_deg"] = pd.to_numeric(
-        gps_frame["longitude_deg"], errors="coerce")
+    time_s = _safe_series(
+        imu_frame, ["TimeUS", "timestamp_s"]).to_numpy(dtype=float)
+    acc_x = _safe_series(
+        imu_frame, ["AccX", "acceleration_x_mps2"]).to_numpy(dtype=float)
+    acc_y = _safe_series(
+        imu_frame, ["AccY", "acceleration_y_mps2"]).to_numpy(dtype=float)
+    acc_z = _safe_series(
+        imu_frame, ["AccZ", "acceleration_z_mps2"]).to_numpy(dtype=float)
 
-    gps_frame = gps_frame.dropna(subset=["timestamp_s", "latitude_deg", "longitude_deg", "altitude_m"]).sort_values(
-        "timestamp_s",
+    valid_mask = np.isfinite(time_s) & np.isfinite(
+        acc_x) & np.isfinite(acc_y) & np.isfinite(acc_z)
+    time_s = time_s[valid_mask]
+    acc_x = acc_x[valid_mask]
+    acc_y = acc_y[valid_mask]
+    acc_z = acc_z[valid_mask]
+
+    if time_s.size == 0:
+        return {
+            "vx": np.array([], dtype=float),
+            "vy": np.array([], dtype=float),
+            "vz": np.array([], dtype=float),
+            "max_horizontal_speed_mps": 0.0,
+            "max_acceleration_mps2": 0.0,
+        }
+
+    order = np.argsort(time_s)
+    time_s = time_s[order]
+    acc_x = acc_x[order]
+    acc_y = acc_y[order]
+    acc_z = acc_z[order]
+
+    sample_count = time_s.size
+    vx = np.zeros(sample_count, dtype=float)
+    vy = np.zeros(sample_count, dtype=float)
+    vz = np.zeros(sample_count, dtype=float)
+
+    for index in range(1, sample_count):
+        delta_time = time_s[index] - time_s[index - 1]
+        if delta_time <= 0:
+            vx[index] = vx[index - 1]
+            vy[index] = vy[index - 1]
+            vz[index] = vz[index - 1]
+            continue
+
+        vx[index] = vx[index - 1] + \
+            (acc_x[index - 1] + acc_x[index]) * 0.5 * delta_time
+        vy[index] = vy[index - 1] + \
+            (acc_y[index - 1] + acc_y[index]) * 0.5 * delta_time
+        vz[index] = vz[index - 1] + \
+            (acc_z[index - 1] + acc_z[index]) * 0.5 * delta_time
+
+    horizontal_speed = np.sqrt(vx ** 2 + vy ** 2)
+    acceleration_magnitude = np.sqrt(acc_x ** 2 + acc_y ** 2 + acc_z ** 2)
+
+    return {
+        "vx": vx,
+        "vy": vy,
+        "vz": vz,
+        "max_horizontal_speed_mps": float(np.max(horizontal_speed)) if horizontal_speed.size else 0.0,
+        "max_acceleration_mps2": float(np.max(acceleration_magnitude)) if acceleration_magnitude.size else 0.0,
+    }
+
+
+def _gps_total_distance_m(gps_frame: pd.DataFrame) -> float:
+    if gps_frame.empty:
+        return 0.0
+
+    latitude = _safe_series(gps_frame, ["Lat", "latitude_deg", "lat"])
+    longitude = _safe_series(gps_frame, ["Lng", "Lon", "longitude_deg", "lon"])
+    points = pd.DataFrame({"lat": latitude, "lng": longitude}).dropna()
+    if len(points) < 2:
+        return 0.0
+
+    distance_sum = 0.0
+    previous = points.iloc[0]
+    for _, current in points.iloc[1:].iterrows():
+        distance_sum += haversine_distance_m(
+            float(previous["lat"]),
+            float(previous["lng"]),
+            float(current["lat"]),
+            float(current["lng"]),
+        )
+        previous = current
+    return float(distance_sum)
+
+
+def _altitude_gain_m(gps_frame: pd.DataFrame, baro_frame: pd.DataFrame) -> float:
+    gains: list[float] = []
+
+    gps_alt = _safe_series(gps_frame, ["Alt", "altitude_m", "alt"]).dropna()
+    if not gps_alt.empty:
+        gains.append(float(gps_alt.max() - gps_alt.min()))
+
+    baro_alt = _safe_series(baro_frame, ["Alt", "altitude_m", "alt"]).dropna()
+    if not baro_alt.empty:
+        gains.append(float(baro_alt.max() - baro_alt.min()))
+
+    return float(max(gains)) if gains else 0.0
+
+
+def _flight_duration_s(gps_frame: pd.DataFrame, imu_frame: pd.DataFrame, baro_frame: pd.DataFrame) -> float:
+    all_times = pd.concat(
+        [
+            _safe_series(gps_frame, ["TimeUS", "timestamp_s"]),
+            _safe_series(imu_frame, ["TimeUS", "timestamp_s"]),
+            _safe_series(baro_frame, ["TimeUS", "timestamp_s"]),
+        ],
         ignore_index=True,
-    )
+    ).dropna()
 
-    origin_row = gps_frame.iloc[0]
-    origin_point = GeoPoint(
-        latitude=float(origin_row["latitude_deg"]),
-        longitude=float(origin_row["longitude_deg"]),
-        altitude_m=float(origin_row["altitude_m"]),
-    )
+    if all_times.empty:
+        return 0.0
+    return float(all_times.max() - all_times.min())
 
-    trajectory_records: list[dict[str, Any]] = []
-    segment_distances_m: list[float] = []
-    horizontal_speeds_mps: list[float] = []
-    vertical_speeds_mps: list[float] = []
 
-    previous_row = None
-    for _, row in gps_frame.iterrows():
-        east_m, north_m, up_m = wgs84_to_enu(
-            latitude=float(row["latitude_deg"]),
-            longitude=float(row["longitude_deg"]),
-            altitude_m=float(row["altitude_m"]),
-            origin=origin_point,
-        )
+def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[str, Any]:
+    parsed_log = parse_log_bytes(file_bytes, filename=filename)
 
-        speed_mps = _numeric_or_none(row.get("horizontal_velocity_mps"))
-        if speed_mps is None and previous_row is not None:
-            delta_time = float(row["timestamp_s"]) - \
-                float(previous_row["timestamp_s"])
-            if delta_time > 0:
-                segment_distance_m = haversine_distance_m(
-                    float(previous_row["latitude_deg"]),
-                    float(previous_row["longitude_deg"]),
-                    float(row["latitude_deg"]),
-                    float(row["longitude_deg"]),
-                )
-                speed_mps = segment_distance_m / delta_time
-            else:
-                speed_mps = 0.0
-        elif speed_mps is None:
-            speed_mps = 0.0
+    gps_frame = parsed_log.gps.copy()
+    imu_frame = parsed_log.imu.copy()
+    baro_frame = parsed_log.baro.copy()
 
-        if previous_row is not None:
-            delta_time = float(row["timestamp_s"]) - \
-                float(previous_row["timestamp_s"])
-            if delta_time > 0:
-                segment_distance_m = haversine_distance_m(
-                    float(previous_row["latitude_deg"]),
-                    float(previous_row["longitude_deg"]),
-                    float(row["latitude_deg"]),
-                    float(row["longitude_deg"]),
-                )
-                segment_distances_m.append(segment_distance_m)
-                horizontal_speeds_mps.append(segment_distance_m / delta_time)
-                vertical_speeds_mps.append(
-                    (float(row["altitude_m"]) - float(previous_row["altitude_m"])) / delta_time)
+    trajectory_frame = _build_trajectory_frame(gps_frame)
+    imu_metrics = _compute_imu_velocity_metrics(imu_frame)
 
-        trajectory_records.append(
-            {
-                "timestamp_s": float(row["timestamp_s"]),
-                "latitude_deg": float(row["latitude_deg"]),
-                "longitude_deg": float(row["longitude_deg"]),
-                "altitude_m": float(row["altitude_m"]),
-                "east_m": east_m,
-                "north_m": north_m,
-                "up_m": up_m,
-                "speed_mps": float(speed_mps),
-                "color_time_s": float(row["timestamp_s"]),
-            }
-        )
-        previous_row = row
+    gps_speed = _safe_series(
+        gps_frame, ["Spd", "Speed", "groundspeed"]).dropna()
+    max_gps_speed = float(gps_speed.max()) if not gps_speed.empty else 0.0
+    max_horizontal_speed = max(
+        float(imu_metrics["max_horizontal_speed_mps"]), max_gps_speed)
 
-    trajectory_frame = pd.DataFrame(trajectory_records)
-
-    imu_magnitude = _safe_series(imu_frame, "acceleration_magnitude_mps2")
-    imu_timestamps = _safe_series(imu_frame, "timestamp_s")
-    estimated_velocity_from_acceleration = _integrate_trapezoidal(
-        imu_timestamps, imu_magnitude, initial_value=0.0)
-
-    altitude_gain_m = float(
-        gps_frame["altitude_m"].max() - gps_frame.iloc[0]["altitude_m"])
-    total_distance_m = float(np.sum(segment_distances_m)
-                             ) if segment_distances_m else 0.0
-    duration_s = float(
-        gps_frame.iloc[-1]["timestamp_s"] - gps_frame.iloc[0]["timestamp_s"])
+    gps_vz = _safe_series(
+        gps_frame, ["VZ", "VelD", "velocity_down_mps"]).dropna()
+    baro_crt = _safe_series(baro_frame, ["CRt", "vertical_speed_mps"]).dropna()
+    vertical_candidates: list[float] = []
+    if not gps_vz.empty:
+        vertical_candidates.append(
+            float(np.max(np.abs(gps_vz.to_numpy(dtype=float)))))
+    if not baro_crt.empty:
+        vertical_candidates.append(
+            float(np.max(np.abs(baro_crt.to_numpy(dtype=float)))))
+    max_vertical_speed = float(
+        max(vertical_candidates)) if vertical_candidates else 0.0
 
     metrics = {
-        "duration_s": duration_s,
-        "total_distance_m": total_distance_m,
-        "max_horizontal_speed_mps": float(max(horizontal_speeds_mps)) if horizontal_speeds_mps else float(trajectory_frame["speed_mps"].max()),
-        "max_vertical_speed_mps": float(max((abs(value) for value in vertical_speeds_mps), default=0.0)),
-        "max_acceleration_mps2": float(imu_magnitude.max()) if not imu_magnitude.empty else 0.0,
-        "max_altitude_gain_m": altitude_gain_m,
-        "max_estimated_speed_from_acceleration_mps": float(estimated_velocity_from_acceleration.max()) if estimated_velocity_from_acceleration.size else 0.0,
+        "duration_s": _flight_duration_s(gps_frame, imu_frame, baro_frame),
+        "total_distance_m": _gps_total_distance_m(gps_frame),
+        "max_horizontal_speed_mps": max_horizontal_speed,
+        "max_vertical_speed_mps": max_vertical_speed,
+        "max_acceleration_mps2": float(imu_metrics["max_acceleration_mps2"]),
+        "max_altitude_gain_m": _altitude_gain_m(gps_frame, baro_frame),
+        "max_estimated_speed_from_acceleration_mps": float(imu_metrics["max_horizontal_speed_mps"]),
     }
+
+    if gps_frame.empty and imu_frame.empty and baro_frame.empty:
+        metrics["error"] = "No decodable GPS/IMU/BARO packets found in the log file."
 
     return {
         "filename": filename,
@@ -547,7 +776,11 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
         "trajectory_enu": trajectory_frame.to_dict(orient="records"),
         "plotly_figure": _build_plotly_figure(trajectory_frame),
         "google_maps": _build_google_maps_payload(trajectory_frame),
-        "acceleration_profile": estimated_velocity_from_acceleration.tolist(),
+        "acceleration_profile": {
+            "vx": imu_metrics["vx"].tolist() if isinstance(imu_metrics["vx"], np.ndarray) else [],
+            "vy": imu_metrics["vy"].tolist() if isinstance(imu_metrics["vy"], np.ndarray) else [],
+            "vz": imu_metrics["vz"].tolist() if isinstance(imu_metrics["vz"], np.ndarray) else [],
+        },
     }
 
 
