@@ -1,14 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f3f6f4;
-  --foreground: #14211d;
-  --surface: #ffffff;
-  --surface-soft: #edf3ef;
-  --line: #c8d7cf;
-  --brand: #0f766e;
-  --brand-ink: #0a4943;
-  --accent: #c9723b;
+  --background: #f6f3ee;
+  --foreground: #1b2321;
+  --surface: #fffdf8;
+  --surface-soft: #f2ebe2;
+  --line: #d7cdc1;
+  --brand: #0b5d57;
+  --brand-ink: #083d37;
+  --accent: #d08a4b;
+  --accent-ink: #7a3d14;
 }
 
 @theme inline {
@@ -20,6 +21,7 @@
   --color-brand: var(--brand);
   --color-brand-ink: var(--brand-ink);
   --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -28,25 +30,36 @@ body {
   min-height: 100vh;
   background: var(--background);
   background-image:
+    radial-gradient(circle at 10% 10%, rgba(11, 93, 87, 0.18), transparent 38%),
     radial-gradient(
-      circle at 8% 15%,
-      rgba(15, 118, 110, 0.15),
-      transparent 36%
+      circle at 90% 8%,
+      rgba(208, 138, 75, 0.22),
+      transparent 32%
     ),
-    radial-gradient(
-      circle at 88% 4%,
-      rgba(201, 114, 59, 0.16),
-      transparent 28%
-    ),
+    radial-gradient(circle at 80% 85%, rgba(11, 93, 87, 0.12), transparent 42%),
     linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.72) 0%,
-      rgba(243, 246, 244, 0.9) 100%
+      rgba(255, 255, 255, 0.76) 0%,
+      rgba(246, 243, 238, 0.96) 100%
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(27, 35, 33, 0.05),
+      rgba(27, 35, 33, 0.05) 1px,
+      transparent 1px,
+      transparent 28px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(27, 35, 33, 0.04),
+      rgba(27, 35, 33, 0.04) 1px,
+      transparent 1px,
+      transparent 28px
     );
   color: var(--foreground);
   font-family: var(--font-geist-sans), "Segoe UI", sans-serif;
 }
 
 ::selection {
-  background: rgba(15, 118, 110, 0.2);
+  background: rgba(208, 138, 75, 0.35);
 }

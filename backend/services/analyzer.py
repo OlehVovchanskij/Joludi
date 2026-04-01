@@ -242,6 +242,119 @@ def _frame_from_rows(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return frame
 
 
+def _first_existing_column(frame: pd.DataFrame, names: list[str]) -> str | None:
+    for name in names:
+        if name in frame.columns:
+            return name
+    return None
+
+
+def _select_primary_frame(
+    frames_by_name: dict[str, pd.DataFrame],
+    preferred_names: list[str],
+    fallback_prefixes: list[str],
+) -> pd.DataFrame:
+    for name in preferred_names:
+        frame = frames_by_name.get(name)
+        if frame is not None and not frame.empty:
+            return frame.copy()
+    return _merge_frames(frames_by_name, prefixes=fallback_prefixes)
+
+
+def _scale_if_out_of_range(series: pd.Series, threshold: float, factor: float) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.dropna().empty:
+        return numeric
+    median_abs = float(numeric.dropna().abs().median())
+    if median_abs > threshold:
+        return numeric / factor
+    return numeric
+
+
+def _unwrap_altitude_series(series: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.dropna().empty:
+        return numeric
+
+    neg_ratio = float((numeric < -1).mean())
+    if neg_ratio < 0.6:
+        return numeric
+
+    wrap_m = 655.36
+    candidate = numeric.copy()
+    candidate = candidate.mask(candidate < 0, candidate + wrap_m)
+
+    candidate_median = float(candidate.dropna().median())
+    if candidate_median < 0 or candidate_median > 5000:
+        return numeric
+
+    if float((candidate < 0).mean()) > 0.1:
+        return numeric
+
+    return candidate
+
+
+def _normalize_gps_frame(gps_frame: pd.DataFrame) -> pd.DataFrame:
+    if gps_frame.empty:
+        return gps_frame
+
+    frame = gps_frame.copy()
+    lat_col = _first_existing_column(frame, ["Lat", "latitude_deg", "lat"])
+    lon_col = _first_existing_column(frame, ["Lng", "Lon", "longitude_deg", "lon"])
+    alt_col = _first_existing_column(frame, ["Alt", "altitude_m", "alt"])
+    spd_col = _first_existing_column(frame, ["Spd", "Speed", "groundspeed"])
+    vz_col = _first_existing_column(frame, ["VZ", "VelD", "velocity_down_mps"])
+
+    if lat_col:
+        frame[lat_col] = _scale_if_out_of_range(frame[lat_col], 180.0, 1e7)
+    if lon_col:
+        frame[lon_col] = _scale_if_out_of_range(frame[lon_col], 180.0, 1e7)
+    if alt_col:
+        frame[alt_col] = _scale_if_out_of_range(frame[alt_col], 10_000.0, 100.0)
+        frame[alt_col] = _unwrap_altitude_series(frame[alt_col])
+    if spd_col:
+        frame[spd_col] = _scale_if_out_of_range(frame[spd_col], 200.0, 100.0)
+    if vz_col:
+        frame[vz_col] = _scale_if_out_of_range(frame[vz_col], 200.0, 100.0)
+
+    lat_series = pd.to_numeric(frame[lat_col], errors="coerce") if lat_col else pd.Series(dtype=float)
+    lon_series = pd.to_numeric(frame[lon_col], errors="coerce") if lon_col else pd.Series(dtype=float)
+
+    if not lat_series.empty and not lon_series.empty:
+        valid_mask = lat_series.between(-90, 90) & lon_series.between(-180, 180)
+        filtered = frame.loc[valid_mask].copy()
+
+        status_col = _first_existing_column(frame, ["Status", "Fix", "FixType"])
+        if status_col and not filtered.empty:
+            status_series = pd.to_numeric(filtered[status_col], errors="coerce")
+            status_filtered = filtered.loc[status_series >= 3]
+            if not status_filtered.empty:
+                filtered = status_filtered
+
+        sats_col = _first_existing_column(frame, ["NSats", "Sats", "Sat"])
+        if sats_col and not filtered.empty:
+            sats_series = pd.to_numeric(filtered[sats_col], errors="coerce")
+            sats_filtered = filtered.loc[sats_series >= 4]
+            if not sats_filtered.empty:
+                filtered = sats_filtered
+
+        if not filtered.empty:
+            frame = filtered
+
+    return frame
+
+
+def _robust_speed_limit(speed_values: np.ndarray, max_allowed: float) -> float:
+    if speed_values.size == 0:
+        return max_allowed
+
+    median = float(np.median(speed_values))
+    mad = float(np.median(np.abs(speed_values - median)))
+    if mad <= 0:
+        return max_allowed
+    return min(max_allowed, median + 6.0 * mad)
+
+
 def _merge_frames(
     frames_by_name: dict[str, pd.DataFrame],
     names: list[str] | None = None,
@@ -339,7 +452,8 @@ def parse_log_bytes(file_bytes: bytes, filename: str | None = None) -> ParsedLog
     frames_by_name = {message_name: _frame_from_rows(
         rows) for message_name, rows in rows_by_message.items()}
 
-    gps_frame = _merge_frames(frames_by_name, prefixes=["GPS"])
+    gps_frame = _select_primary_frame(frames_by_name, ["GPS", "GPS1"], ["GPS"])
+    gps_frame = _normalize_gps_frame(gps_frame)
     imu_frame = _merge_frames(frames_by_name, names=["IMU", "IMU2", "IMU3"])
     baro_frame = _merge_frames(frames_by_name, prefixes=["BARO"])
     raw_frame = _frame_from_rows(raw_records)
@@ -393,32 +507,60 @@ def _build_trajectory_frame(gps_frame: pd.DataFrame) -> pd.DataFrame:
         altitude_m=float(valid_frame.iloc[0]["altitude_m"]),
     )
 
-    records: list[dict[str, Any]] = []
+    max_allowed_speed = float(os.getenv("MAX_GPS_SPEED_MPS", "120"))
+    segment_speeds: list[float] = []
     previous_row: pd.Series | None = None
+
     for _, row in valid_frame.iterrows():
+        if previous_row is None:
+            previous_row = row
+            continue
+
+        delta_time = float(row["timestamp_s"] - previous_row["timestamp_s"])
+        if delta_time <= 0:
+            continue
+
+        segment_distance = haversine_distance_m(
+            float(previous_row["latitude_deg"]),
+            float(previous_row["longitude_deg"]),
+            float(row["latitude_deg"]),
+            float(row["longitude_deg"]),
+        )
+        segment_speeds.append(segment_distance / delta_time)
+        previous_row = row
+
+    speed_limit = _robust_speed_limit(np.asarray(segment_speeds, dtype=float), max_allowed_speed)
+
+    records: list[dict[str, Any]] = []
+    previous_row = None
+    for _, row in valid_frame.iterrows():
+        segment_speed = None
+        if previous_row is not None:
+            delta_time = float(row["timestamp_s"] - previous_row["timestamp_s"])
+            if delta_time <= 0:
+                continue
+
+            segment_distance = haversine_distance_m(
+                float(previous_row["latitude_deg"]),
+                float(previous_row["longitude_deg"]),
+                float(row["latitude_deg"]),
+                float(row["longitude_deg"]),
+            )
+            segment_speed = segment_distance / delta_time
+            if segment_speed > speed_limit:
+                continue
+
         east_m, north_m, up_m = wgs84_to_enu(
             latitude=float(row["latitude_deg"]),
             longitude=float(row["longitude_deg"]),
             altitude_m=float(row["altitude_m"]),
             origin=origin,
         )
+        relative_altitude_m = float(row["altitude_m"]) - origin.altitude_m
 
         speed_mps = _numeric_or_none(row.get("gps_speed_mps"))
-        if speed_mps is None and previous_row is not None:
-            delta_time = float(row["timestamp_s"] -
-                               previous_row["timestamp_s"])
-            if delta_time > 0:
-                segment_distance = haversine_distance_m(
-                    float(previous_row["latitude_deg"]),
-                    float(previous_row["longitude_deg"]),
-                    float(row["latitude_deg"]),
-                    float(row["longitude_deg"]),
-                )
-                speed_mps = segment_distance / delta_time
-            else:
-                speed_mps = 0.0
-        elif speed_mps is None:
-            speed_mps = 0.0
+        if speed_mps is None:
+            speed_mps = segment_speed if segment_speed is not None else 0.0
 
         records.append(
             {
@@ -426,6 +568,7 @@ def _build_trajectory_frame(gps_frame: pd.DataFrame) -> pd.DataFrame:
                 "latitude_deg": float(row["latitude_deg"]),
                 "longitude_deg": float(row["longitude_deg"]),
                 "altitude_m": float(row["altitude_m"]),
+                "relative_altitude_m": float(relative_altitude_m),
                 "east_m": east_m,
                 "north_m": north_m,
                 "up_m": up_m,
@@ -697,6 +840,23 @@ def _gps_total_distance_m(gps_frame: pd.DataFrame) -> float:
     return float(distance_sum)
 
 
+def _trajectory_total_distance_m(trajectory_frame: pd.DataFrame) -> float:
+    if trajectory_frame.empty:
+        return 0.0
+
+    distance_sum = 0.0
+    previous = trajectory_frame.iloc[0]
+    for _, current in trajectory_frame.iloc[1:].iterrows():
+        distance_sum += haversine_distance_m(
+            float(previous["latitude_deg"]),
+            float(previous["longitude_deg"]),
+            float(current["latitude_deg"]),
+            float(current["longitude_deg"]),
+        )
+        previous = current
+    return float(distance_sum)
+
+
 def _altitude_gain_m(gps_frame: pd.DataFrame, baro_frame: pd.DataFrame) -> float:
     gains: list[float] = []
 
@@ -736,11 +896,12 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
     trajectory_frame = _build_trajectory_frame(gps_frame)
     imu_metrics = _compute_imu_velocity_metrics(imu_frame)
 
-    gps_speed = _safe_series(
-        gps_frame, ["Spd", "Speed", "groundspeed"]).dropna()
-    max_gps_speed = float(gps_speed.max()) if not gps_speed.empty else 0.0
-    max_horizontal_speed = max(
-        float(imu_metrics["max_horizontal_speed_mps"]), max_gps_speed)
+    max_gps_speed = (
+        float(trajectory_frame["speed_mps"].max())
+        if not trajectory_frame.empty and "speed_mps" in trajectory_frame.columns
+        else 0.0
+    )
+    max_horizontal_speed = max_gps_speed
 
     gps_vz = _safe_series(
         gps_frame, ["VZ", "VelD", "velocity_down_mps"]).dropna()
@@ -757,7 +918,7 @@ def analyze_log_bytes(file_bytes: bytes, filename: str | None = None) -> dict[st
 
     metrics = {
         "duration_s": _flight_duration_s(gps_frame, imu_frame, baro_frame),
-        "total_distance_m": _gps_total_distance_m(gps_frame),
+        "total_distance_m": _trajectory_total_distance_m(trajectory_frame),
         "max_horizontal_speed_mps": max_horizontal_speed,
         "max_vertical_speed_mps": max_vertical_speed,
         "max_acceleration_mps2": float(imu_metrics["max_acceleration_mps2"]),
