@@ -1,11 +1,42 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-joludi}
+      - POSTGRES_USER=${POSTGRES_USER:-joludi}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-joludi}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   drone-analyzer:
     build:
       context: .
       dockerfile: Dockerfile
+    depends_on:
+      - postgres
     ports:
       - "8501:8501"
     environment:
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://joludi:joludi@postgres:5432/joludi}
+      - HISTORY_ENABLED=${HISTORY_ENABLED:-true}
+      - HISTORY_RETENTION_DAYS=${HISTORY_RETENTION_DAYS:-30}
+      - HISTORY_MAX_ROWS=${HISTORY_MAX_ROWS:-20000}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Joludi_app}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-false}
+      - APP_PUBLIC_URL=${APP_PUBLIC_URL:-http://localhost:3000}
+      - EMAIL_VERIFICATION_TOKEN_TTL_MINUTES=${EMAIL_VERIFICATION_TOKEN_TTL_MINUTES:-1440}
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data
+
+volumes:
+  postgres_data:

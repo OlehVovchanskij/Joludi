@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from endpoints.auth import router as auth_router
 from endpoints.analysis import router as analysis_router
+from services.history_store import create_history_tables
 
 
 app = FastAPI(
@@ -19,6 +21,12 @@ app.add_middleware(
 )
 
 app.include_router(analysis_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    create_history_tables()
 
 
 @app.get("/health")

@@ -8,3 +8,5 @@ plotly
 pymavlink
 haversine
 streamlit
+sqlalchemy
+psycopg2-binary

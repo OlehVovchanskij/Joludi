@@ -40,7 +40,9 @@ export default function Trajectory3D({
       ? (baseScene.zaxis as Record<string, unknown>)
       : {};
 
-  const plotData = [...(data as Plotly.Data[])];
+  const plotData = [...(data as Array<Record<string, unknown>>)] as Array<
+    Record<string, unknown>
+  >;
   if (activePoint) {
     plotData.push({
       type: "scatter3d",
@@ -50,7 +52,7 @@ export default function Trajectory3D({
       z: [activePoint.up_m],
       marker: { size: 6, color: "#d08a4b" },
       name: "Current",
-    } as Plotly.Data);
+    });
   }
 
   return (

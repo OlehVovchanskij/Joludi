@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Trajectory3D from "../components/Trajectory3D";
 
@@ -53,6 +54,13 @@ type AnalyzeResponse = {
 type SummaryResponse = {
   provider: string;
   summary: string;
+  recommendations?: string[];
+  risk_level?: "low" | "medium" | "high";
+};
+
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8501";
@@ -140,12 +148,116 @@ function classifyFlightStyle(maxSpeed?: number, maxAccel?: number) {
   };
 }
 
+function riskLevelLabel(riskLevel?: "low" | "medium" | "high") {
+  if (riskLevel === "high") {
+    return "Високий ризик";
+  }
+  if (riskLevel === "medium") {
+    return "Середній ризик";
+  }
+  if (riskLevel === "low") {
+    return "Низький ризик";
+  }
+  return "Ризик не оцінено";
+}
+
+function deriveRiskLevel(
+  metrics?: Metrics | null,
+): "low" | "medium" | "high" | null {
+  if (!metrics) {
+    return null;
+  }
+
+  const maxHorizontalSpeed = metrics.max_horizontal_speed_mps;
+  const maxVerticalSpeed = metrics.max_vertical_speed_mps;
+  const maxAcceleration = metrics.max_acceleration_mps2;
+
+  if (
+    (typeof maxHorizontalSpeed === "number" && maxHorizontalSpeed > 30) ||
+    (typeof maxVerticalSpeed === "number" && maxVerticalSpeed > 6) ||
+    (typeof maxAcceleration === "number" && maxAcceleration > 15)
+  ) {
+    return "high";
+  }
+
+  if (
+    (typeof maxHorizontalSpeed === "number" && maxHorizontalSpeed > 18) ||
+    (typeof maxVerticalSpeed === "number" && maxVerticalSpeed > 4) ||
+    (typeof maxAcceleration === "number" && maxAcceleration > 9)
+  ) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function derivePilotRecommendations(metrics?: Metrics | null): string[] {
+  if (!metrics) {
+    return [];
+  }
+
+  const recommendations: string[] = [];
+  const maxHorizontalSpeed = metrics.max_horizontal_speed_mps;
+  const maxVerticalSpeed = metrics.max_vertical_speed_mps;
+  const maxAcceleration = metrics.max_acceleration_mps2;
+  const maxAltitudeGain = metrics.max_altitude_gain_m;
+
+  if (typeof maxHorizontalSpeed === "number" && maxHorizontalSpeed > 30) {
+    recommendations.push(
+      "Зменште пікову горизонтальну швидкість і перевірте, чи профіль місії не надто агресивний для задачі.",
+    );
+  } else if (typeof maxHorizontalSpeed === "number" && maxHorizontalSpeed > 18) {
+    recommendations.push(
+      "Поточний профіль руху динамічний: якщо задача не вимагає швидких розгонів, згладьте горизонтальні маневри.",
+    );
+  }
+
+  if (typeof maxVerticalSpeed === "number" && maxVerticalSpeed > 6) {
+    recommendations.push(
+      "Зменште вертикальні прискорення: перевірте висотний контур, hover tuning і стабільність набору/зниження.",
+    );
+  } else if (typeof maxVerticalSpeed === "number" && maxVerticalSpeed > 4) {
+    recommendations.push(
+      "Вертикальна динаміка помітна, тому варто переглянути плавність зміни висоти та реакцію на тягу.",
+    );
+  }
+
+  if (typeof maxAcceleration === "number" && maxAcceleration > 20) {
+    recommendations.push(
+      "Перевірте калібрування IMU та PID-настройки: піки прискорення виглядають надто різкими.",
+    );
+  } else if (typeof maxAcceleration === "number" && maxAcceleration > 9) {
+    recommendations.push(
+      "Зафіксовано активні прискорення: оцініть, чи не занадто різко змінюється тяга або курс.",
+    );
+  }
+
+  if (typeof maxAltitudeGain === "number" && maxAltitudeGain < 3) {
+    recommendations.push(
+      "Місія майже не набирала висоту: якщо це не тестовий політ, перевірте задачу місії та обмеження по throttle.",
+    );
+  }
+
+  if (!recommendations.length) {
+    recommendations.push(
+      "Профіль польоту виглядає стабільним; для поглибленого аналізу звірте 3D-траєкторію з часовим профілем швидкості.",
+    );
+  }
+
+  return recommendations.slice(0, 4);
+}
+
 export default function Home() {
+  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
   const [activeView, setActiveView] = useState<"map" | "threeD">("map");
   const [currentTime, setCurrentTime] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -172,6 +284,10 @@ export default function Home() {
   const analysisReady = Boolean(result && !loading);
   const telemetryOk = Boolean(result && !metrics?.error);
   const hasTrajectory = trajectoryTimeline.length > 1;
+  const pilotRecommendations = summary?.recommendations?.length
+    ? summary.recommendations
+    : derivePilotRecommendations(metrics);
+  const pilotRiskLevel = summary?.risk_level ?? deriveRiskLevel(metrics) ?? undefined;
 
   const mapPoints = useMemo(
     () =>
@@ -192,6 +308,185 @@ export default function Home() {
         .timestamp_s as number,
     };
   }, [trajectoryTimeline]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const raw = window.localStorage.getItem("joludi_auth");
+      if (!raw) {
+        setIsAuthorized(false);
+        return;
+      }
+      const parsed = JSON.parse(raw) as {
+        session?: { access_token?: string | null } | null;
+      };
+      setIsAuthorized(Boolean(parsed?.session?.access_token));
+    } catch {
+      setIsAuthorized(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const raw = window.localStorage.getItem("joludi_history_view");
+      if (!raw) {
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as AnalyzeResponse | null;
+      if (parsed) {
+        setResult(parsed);
+        setChatMessages([]);
+        setChatInput("");
+        void fetchPilotSummary(parsed);
+        setError(null);
+      }
+    } catch {
+      // Ignore malformed history view payloads.
+    }
+  }, []);
+
+  async function handleLogout() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    setLogoutLoading(true);
+    try {
+      const raw = window.localStorage.getItem("joludi_auth");
+      const stored = raw
+        ? (JSON.parse(raw) as {
+          session?: { refresh_token?: string | null } | null;
+        })
+        : null;
+
+      const refreshToken = stored?.session?.refresh_token;
+      if (refreshToken) {
+        await fetch(`${API_BASE}/api/auth/logout`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+      }
+    } catch {
+      // Ignore logout API or storage parsing failures and clear the local session anyway.
+    } finally {
+      window.localStorage.removeItem("joludi_auth");
+      window.localStorage.removeItem("joludi_history_view");
+      setIsAuthorized(false);
+      setLogoutLoading(false);
+    }
+  }
+
+  function readAccessToken(): string | null {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    try {
+      const raw = window.localStorage.getItem("joludi_auth");
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as {
+        session?: { access_token?: string | null } | null;
+      };
+      return parsed?.session?.access_token ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchPilotSummary(data: AnalyzeResponse) {
+    if (data.metrics?.error) {
+      setSummary(null);
+      return;
+    }
+
+    try {
+      const summaryResponse = await fetch(`${API_BASE}/api/ai/summary`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ analysis: data }),
+      });
+
+      if (summaryResponse.ok) {
+        const summaryData = (await summaryResponse.json()) as SummaryResponse;
+        setSummary({
+          ...summaryData,
+          recommendations:
+            summaryData.recommendations?.length
+              ? summaryData.recommendations
+              : derivePilotRecommendations(data.metrics),
+          risk_level: summaryData.risk_level ?? deriveRiskLevel(data.metrics) ?? undefined,
+        });
+        return;
+      }
+    } catch {
+      setSummary({
+        provider: "fallback",
+        summary:
+          "Не вдалося отримати AI-висновок, тому рекомендації згенеровано локально з метрик.",
+        recommendations: derivePilotRecommendations(data.metrics),
+        risk_level: deriveRiskLevel(data.metrics) ?? undefined,
+      });
+    }
+  }
+
+  async function sendChatMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!result || !chatInput.trim() || chatLoading) {
+      return;
+    }
+
+    const userMessage: ChatMessage = { role: "user", content: chatInput.trim() };
+    const nextMessages = [...chatMessages, userMessage];
+    setChatMessages(nextMessages);
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/api/ai/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ analysis: result, messages: nextMessages }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`AI chat request failed: ${response.status}`);
+      }
+
+      const data = (await response.json()) as { provider?: string; reply?: string };
+      setChatMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content:
+            data.reply ??
+            "Не вдалося отримати відповідь від AI. Спробуйте поставити питання ще раз.",
+        },
+      ]);
+    } catch {
+      setChatMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content:
+            "Не вдалося зв'язатися з AI-коучем. Перевір модель, API ключ або endpoint.",
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!timeRange) {
@@ -230,6 +525,8 @@ export default function Home() {
     event.preventDefault();
     setError(null);
     setSummary(null);
+    setChatMessages([]);
+    setChatInput("");
 
     if (!file) {
       setError("Оберіть .bin файл перед аналізом.");
@@ -241,8 +538,15 @@ export default function Home() {
       const body = new FormData();
       body.append("file", file);
 
+      const accessToken = readAccessToken();
+      const headers: HeadersInit = {};
+      if (accessToken) {
+        headers.Authorization = `Bearer ${accessToken}`;
+      }
+
       const response = await fetch(`${API_BASE}/api/analyze`, {
         method: "POST",
+        headers,
         body,
       });
 
@@ -256,21 +560,7 @@ export default function Home() {
       if (data.metrics?.error) {
         setError(data.metrics.error);
       } else {
-        try {
-          const summaryResponse = await fetch(`${API_BASE}/api/ai/summary`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ analysis: data }),
-          });
-
-          if (summaryResponse.ok) {
-            const summaryData =
-              (await summaryResponse.json()) as SummaryResponse;
-            setSummary(summaryData);
-          }
-        } catch {
-          setSummary(null);
-        }
+        await fetchPilotSummary(data);
       }
     } catch (submitError) {
       const message =
@@ -489,10 +779,10 @@ export default function Home() {
   const activeAltitudeMsl = activePoint?.altitude_m ?? activePoint?.up_m;
   const mapMeta = activePoint
     ? {
-        time_s: elapsedTime,
-        speed_mps: activePoint.speed_mps,
-        altitude_m: activeAltitudeMsl,
-      }
+      time_s: elapsedTime,
+      speed_mps: activePoint.speed_mps,
+      altitude_m: activeAltitudeMsl,
+    }
     : null;
 
   const telemetryCards = [
@@ -544,7 +834,6 @@ export default function Home() {
       value: `${formatNumber(elapsedTime, 1)} s`,
     },
   ];
-
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-8 md:px-8">
       <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-40 bg-[radial-gradient(60%_90%_at_50%_10%,rgba(11,93,87,0.22),transparent)]" />
@@ -566,6 +855,31 @@ export default function Home() {
             <span className="rounded-full border border-line/70 bg-surface/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-foreground/55">
               Telemetry Deck
             </span>
+            {isAuthorized ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href="/history"
+                  className="inline-flex items-center rounded-full border border-brand/20 bg-brand px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white transition hover:bg-brand-ink"
+                >
+                  Історія
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  disabled={logoutLoading}
+                  className="inline-flex items-center rounded-full border border-accent/25 bg-accent px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white transition hover:bg-accent-ink disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {logoutLoading ? "Вихід..." : "Logout"}
+                </button>
+              </div>
+            ) : (
+              <Link
+                href="/auth"
+                className="inline-flex items-center rounded-full border border-brand/20 bg-brand px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white transition hover:bg-brand-ink"
+              >
+                Авторизація
+              </Link>
+            )}
           </div>
           <h1 className="text-3xl font-semibold leading-tight text-foreground md:text-4xl">
             Система аналізу телеметрії та 3D-візуалізації польотів БПЛА
@@ -660,11 +974,10 @@ export default function Home() {
         <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <form className="space-y-4" onSubmit={onSubmit}>
             <label
-              className={`flex min-h-[170px] cursor-pointer flex-col justify-between rounded-2xl border border-dashed px-4 py-4 text-sm transition ${
-                isDragging
+              className={`flex min-h-[170px] cursor-pointer flex-col justify-between rounded-2xl border border-dashed px-4 py-4 text-sm transition ${isDragging
                   ? "border-brand/70 bg-brand/10"
                   : "border-line/70 bg-surface"
-              }`}
+                }`}
               onDragOver={(event) => {
                 event.preventDefault();
                 setIsDragging(true);
@@ -873,17 +1186,51 @@ export default function Home() {
         <div className="rounded-3xl border border-line/70 bg-[linear-gradient(145deg,rgba(255,245,227,0.88)_0%,rgba(255,236,207,0.92)_100%)] p-5 shadow-[0_12px_30px_rgba(122,61,20,0.18)]">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-accent-ink">
-              AI Mission Brief
+              AI-порадник пілота
             </p>
-            <span className="rounded-full border border-accent/40 bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent-ink">
-              {summary ? summary.provider : "standby"}
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-accent/40 bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent-ink">
+                {summary ? summary.provider : "standby"}
+              </span>
+              <span className="rounded-full border border-accent/40 bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-accent-ink">
+                {riskLevelLabel(pilotRiskLevel)}
+              </span>
+            </div>
           </div>
           <p className="mt-3 text-sm leading-7 text-amber-950">
             {summary?.summary
               ? summary.summary
               : "AI резюме з'явиться після аналізу. Поки що переглянь метрики та трек для швидкої оцінки польоту."}
           </p>
+          <div className="mt-4 grid gap-3 lg:grid-cols-[0.95fr_1.05fr]">
+            <div className="rounded-2xl border border-accent/30 bg-white/65 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-ink/70">
+                Основна порада
+              </p>
+              <p className="mt-2 text-sm leading-6 text-amber-950">
+                {pilotRecommendations[0] ?? "Порада з'явиться після аналізу місії."}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-accent/30 bg-white/65 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-ink/70">
+                Що перевірити далі
+              </p>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-amber-950">
+                {pilotRecommendations.length > 0 ? (
+                  pilotRecommendations.slice(0, 3).map((item) => (
+                    <li key={item} className="flex gap-2">
+                      <span className="mt-1 h-2 w-2 rounded-full bg-accent-ink/70" />
+                      <span>{item}</span>
+                    </li>
+                  ))
+                ) : (
+                  <li className="text-amber-950/70">
+                    Після аналізу тут з'являться короткі actionable рекомендації.
+                  </li>
+                )}
+              </ul>
+            </div>
+          </div>
           <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-accent-ink">
             <span className="rounded-full border border-accent/40 bg-white/60 px-3 py-1">
               {telemetryOk ? "Telemetry clean" : "Telemetry review"}
@@ -918,6 +1265,124 @@ export default function Home() {
       </motion.section>
 
       <motion.section
+        className="grid gap-4 rounded-3xl border border-line/70 bg-surface/90 p-5 shadow-[0_16px_48px_rgba(27,35,33,0.1)] backdrop-blur-sm lg:grid-cols-[1.1fr_0.9fr] md:p-6"
+        initial="hidden"
+        animate="visible"
+        variants={sectionAnimation}
+        transition={{ duration: 0.45, delay: 0.19 }}
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand/75">
+                AI coach
+              </p>
+              <h2 className="mt-2 text-lg font-semibold text-foreground md:text-xl">
+                Поговори з AI-тренером
+              </h2>
+              <p className="mt-1 text-sm text-foreground/60">
+                Питай про помилки, ризики, тренування або конкретні маневри. Асистент бачить поточний аналіз місії.
+              </p>
+            </div>
+            <div className="rounded-full border border-brand/20 bg-brand/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-ink">
+              {summary ? summary.provider : "standby"}
+            </div>
+          </div>
+
+          <div className="max-h-[22rem] space-y-3 overflow-y-auto rounded-2xl border border-line/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.82)_0%,rgba(248,242,234,0.92)_100%)] p-4">
+            {chatMessages.length > 0 ? (
+              chatMessages.map((message, index) => (
+                <div
+                  key={`${message.role}-${index}-${message.content.slice(0, 20)}`}
+                  className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${message.role === "user"
+                        ? "bg-brand text-white"
+                        : "border border-line/60 bg-surface text-foreground"
+                      }`}
+                  >
+                    {message.content}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="flex h-full min-h-[12rem] items-center justify-center rounded-2xl border border-dashed border-line/60 bg-white/50 p-4 text-center text-sm text-foreground/60">
+                Напиши перше питання, наприклад: як зменшити ривки по вертикалі або як тренувати плавні розгони.
+              </div>
+            )}
+            {chatLoading && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl border border-line/60 bg-surface px-4 py-3 text-sm text-foreground/60">
+                  AI формує відповідь...
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-line/70 bg-surface/85 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+          <form className="space-y-3" onSubmit={sendChatMessage}>
+            <label className="block space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-foreground/50">
+                Твоє питання
+              </span>
+              <textarea
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                rows={5}
+                placeholder="Наприклад: що мені змінити, щоб політ був плавніший?"
+                className="w-full resize-none rounded-2xl border border-line/70 bg-surface px-4 py-3 text-sm text-foreground outline-none transition focus:border-brand/50"
+              />
+            </label>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="submit"
+                disabled={!result || chatLoading || !chatInput.trim()}
+                className="rounded-full bg-brand px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {chatLoading ? "Відправляю..." : "Запитати AI"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setChatInput("")}
+                className="rounded-full border border-line/70 bg-surface px-4 py-2 text-sm font-medium text-foreground/70 transition hover:border-brand/40"
+              >
+                Очистити
+              </button>
+            </div>
+          </form>
+
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-foreground/50">
+              Швидкі запити
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                "Як зменшити вертикальні ривки?",
+                "Що змінити, щоб політ був плавнішим?",
+                "Склади 3 тренування для кращого контролю.",
+              ].map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => setChatInput(prompt)}
+                  className="rounded-full border border-accent/30 bg-accent/10 px-3 py-2 text-left text-xs font-medium text-accent-ink transition hover:bg-accent/15"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-brand/15 bg-brand/5 p-4 text-sm leading-6 text-foreground/70">
+            AI-коуч використовує поточний аналіз місії як контекст. Якщо хочеш, я можу ще додати режим збереження діалогу в history або окремі тренувальні сценарії для пілота.
+          </div>
+        </div>
+      </motion.section>
+
+      <motion.section
         className="grid gap-4 rounded-3xl border border-line/70 bg-surface/85 p-5 shadow-[0_16px_48px_rgba(27,35,33,0.1)] backdrop-blur-sm md:p-6 xl:grid-cols-[1.15fr_0.85fr]"
         initial="hidden"
         animate="visible"
@@ -940,22 +1405,20 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setActiveView("map")}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                  activeView === "map"
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${activeView === "map"
                     ? "bg-brand text-white shadow-[0_10px_22px_rgba(11,93,87,0.3)]"
                     : "border border-line bg-surface text-foreground/75"
-                }`}
+                  }`}
               >
                 OSM 2D
               </button>
               <button
                 type="button"
                 onClick={() => setActiveView("threeD")}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                  activeView === "threeD"
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${activeView === "threeD"
                     ? "bg-brand text-white shadow-[0_10px_22px_rgba(11,93,87,0.3)]"
                     : "border border-line bg-surface text-foreground/75"
-                }`}
+                  }`}
               >
                 3D ENU
               </button>
@@ -1022,11 +1485,10 @@ export default function Home() {
                         key={speed}
                         type="button"
                         onClick={() => setPlaybackSpeed(speed)}
-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          playbackSpeed === speed
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${playbackSpeed === speed
                             ? "bg-brand text-white"
                             : "border border-line bg-surface text-foreground/65"
-                        }`}
+                          }`}
                       >
                         {speed}x
                       </button>
@@ -1066,14 +1528,14 @@ export default function Home() {
                 figure={result?.plotly_figure ?? null}
                 activePoint={
                   activePoint &&
-                  typeof activePoint.east_m === "number" &&
-                  typeof activePoint.north_m === "number" &&
-                  typeof activePoint.up_m === "number"
+                    typeof activePoint.east_m === "number" &&
+                    typeof activePoint.north_m === "number" &&
+                    typeof activePoint.up_m === "number"
                     ? {
-                        east_m: activePoint.east_m,
-                        north_m: activePoint.north_m,
-                        up_m: activePoint.up_m,
-                      }
+                      east_m: activePoint.east_m,
+                      north_m: activePoint.north_m,
+                      up_m: activePoint.up_m,
+                    }
                     : null
                 }
               />
