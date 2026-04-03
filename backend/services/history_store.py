@@ -5,9 +5,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import DateTime, Float, Integer, JSON, String, create_engine, delete, inspect, select, text
+from sqlalchemy import DateTime, Float, Integer, JSON, String, create_engine, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from db_migrations import apply_migrations
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 HISTORY_ENABLED = os.getenv("HISTORY_ENABLED", "true").strip().lower() in {
@@ -62,30 +63,7 @@ def create_history_tables() -> None:
     engine = _engine()
     if engine is None:
         return
-    Base.metadata.create_all(engine)
-    _ensure_history_schema(engine)
-
-
-def _ensure_history_schema(engine) -> None:
-    inspector = inspect(engine)
-    if "parse_history" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"]
-               for column in inspector.get_columns("parse_history")}
-    if "user_id" in columns:
-        if "analysis_snapshot" in columns:
-            return
-
-    with engine.begin() as connection:
-        if "user_id" not in columns:
-            connection.execute(
-                text("ALTER TABLE parse_history ADD COLUMN user_id VARCHAR(64)"))
-            connection.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_parse_history_user_id ON parse_history (user_id)"))
-        if "analysis_snapshot" not in columns:
-            connection.execute(
-                text("ALTER TABLE parse_history ADD COLUMN analysis_snapshot JSON"))
+    apply_migrations(engine)
 
 
 def _to_float(value: object) -> float | None:
