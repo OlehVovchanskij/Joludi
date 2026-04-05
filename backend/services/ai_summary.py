@@ -1,10 +1,86 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_MIN_INTERVAL_SECONDS = 1.0
+DEFAULT_FORBIDDEN_COOLDOWN_SECONDS = 600
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_BACKOFF_SECONDS = 1.5
+
+
+_PROVIDER_LAST_REQUEST_AT: dict[str, float] = {}
+_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
+
+
+def _safe_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+        if value < 0:
+            return default
+        return value
+    except ValueError:
+        return default
+
+
+def _safe_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+        if value < 0:
+            return default
+        return value
+    except ValueError:
+        return default
+
+
+def _resolve_ai_runtime() -> dict[str, str | None]:
+    configured_provider = (os.getenv("AI_PROVIDER") or "").strip().lower()
+
+    if configured_provider == "groq":
+        return {
+            "provider": "groq",
+            "api_key": os.getenv("GROQ_API_KEY"),
+            "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+            "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+        }
+
+    if configured_provider == "openai":
+        return {
+            "provider": "openai",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+            "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        }
+
+    if os.getenv("OPENAI_API_KEY"):
+        return {
+            "provider": "openai",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+            "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        }
+
+    return {
+        "provider": "groq",
+        "api_key": os.getenv("GROQ_API_KEY"),
+        "base_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+        "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+    }
 
 
 def _format_metric(value: Any, unit: str) -> str:
@@ -222,13 +298,60 @@ def _call_openai_compatible_chat(
     temperature: float = 0.3,
     response_format: dict[str, Any] | None = None,
 ) -> str | None:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
+    content, _ = _call_openai_compatible_chat_with_logs(
+        messages,
+        temperature=temperature,
+        response_format=response_format,
+    )
+    return content
 
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+def _call_openai_compatible_chat_with_logs(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.3,
+    response_format: dict[str, Any] | None = None,
+) -> tuple[str | None, dict[str, Any]]:
+    runtime = _resolve_ai_runtime()
+    api_key = runtime.get("api_key")
+    base_url = (runtime.get("base_url") or "").strip()
+    model = runtime.get("model") or ""
+    provider = runtime.get("provider") or "unknown"
+
+    min_interval_seconds = _safe_float_env(
+        "AI_PROVIDER_MIN_INTERVAL_SECONDS", DEFAULT_MIN_INTERVAL_SECONDS)
+    forbidden_cooldown_seconds = _safe_int_env(
+        "AI_PROVIDER_FORBIDDEN_COOLDOWN_SECONDS", DEFAULT_FORBIDDEN_COOLDOWN_SECONDS)
+    max_retries = _safe_int_env("AI_PROVIDER_MAX_RETRIES", DEFAULT_MAX_RETRIES)
+    backoff_seconds = _safe_float_env("AI_PROVIDER_BACKOFF_SECONDS", DEFAULT_BACKOFF_SECONDS)
+
+    logs: dict[str, Any] = {
+        "provider": provider,
+        "base_url": base_url,
+        "model": model,
+        "configured": bool(api_key),
+        "message_count": len(messages),
+    }
+
+    if not api_key:
+        logs["error"] = "Missing API key for selected AI provider"
+        return None, logs
+
+    now = time.time()
+    blocked_until = _PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
+    if blocked_until > now:
+        logs["error"] = "Provider cooldown is active after previous blocking response"
+        logs["cooldown_remaining_s"] = round(blocked_until - now, 2)
+        return None, logs
+
+    last_request_at = _PROVIDER_LAST_REQUEST_AT.get(provider, 0.0)
+    wait_seconds = (last_request_at + min_interval_seconds) - now
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+    _PROVIDER_LAST_REQUEST_AT[provider] = time.time()
+
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    logs["endpoint"] = endpoint
 
     body: dict[str, Any] = {
         "model": model,
@@ -246,16 +369,70 @@ def _call_openai_compatible_chat(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Joludi-Backend/1.0 (+https://localhost)",
         },
         method="POST",
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-            return payload["choices"][0]["message"]["content"].strip()
-    except (KeyError, ValueError, urllib.error.URLError, TimeoutError):
-        return None
+    last_error: str | None = None
+    retry_count = 0
+    for attempt in range(max_retries + 1):
+        started = time.perf_counter()
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                raw = response.read().decode("utf-8")
+                payload = json.loads(raw)
+                content = payload["choices"][0]["message"]["content"].strip()
+                logs["status_code"] = response.getcode()
+                logs["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+                logs["finish_reason"] = payload.get("choices", [{}])[0].get("finish_reason")
+                logs["response_preview"] = content[:500]
+                logs["retry_count"] = retry_count
+                return content, logs
+        except urllib.error.HTTPError as exc:
+            error_body = ""
+            try:
+                error_body = exc.read().decode("utf-8")
+            except Exception:
+                error_body = str(exc)
+
+            status_code = getattr(exc, "code", None)
+            last_error = error_body[:1000]
+            logs["status_code"] = status_code
+            logs["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+
+            is_transient = status_code in {429, 500, 502, 503, 504}
+            if is_transient and attempt < max_retries:
+                retry_count += 1
+                logs["retry_count"] = retry_count
+                sleep_for = backoff_seconds * (attempt + 1)
+                time.sleep(sleep_for)
+                continue
+
+            if status_code == 403:
+                _PROVIDER_COOLDOWN_UNTIL[provider] = time.time() + forbidden_cooldown_seconds
+                logs["cooldown_seconds"] = forbidden_cooldown_seconds
+
+            logs["error"] = last_error
+            logger.warning("AI provider HTTP error: %s", logs)
+            return None, logs
+        except (KeyError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+            last_error = str(exc)
+            logs["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+            if attempt < max_retries:
+                retry_count += 1
+                logs["retry_count"] = retry_count
+                sleep_for = backoff_seconds * (attempt + 1)
+                time.sleep(sleep_for)
+                continue
+            logs["error"] = last_error
+            logger.warning("AI provider request failed: %s", logs)
+            return None, logs
+
+    logs["error"] = last_error or "Unexpected provider call failure"
+    logs["retry_count"] = retry_count
+    return None, logs
 
 
 def generate_flight_summary(analysis: dict[str, Any]) -> dict[str, Any]:
@@ -368,4 +545,29 @@ def generate_pilot_coach_reply(
     return {
         "provider": "rule-based",
         "reply": _build_pilot_chat_fallback(analysis, user_message),
+    }
+
+
+def generate_pilot_coach_reply_with_logs(
+    analysis: dict[str, Any],
+    messages: list[dict[str, str]],
+) -> dict[str, Any]:
+    system_prompt = _build_pilot_chat_system_prompt(analysis)
+    chat_messages = [{"role": "system", "content": system_prompt}, *messages]
+    reply, logs = _call_openai_compatible_chat_with_logs(
+        chat_messages,
+        temperature=0.35,
+    )
+    if reply:
+        return {
+            "provider": "llm",
+            "reply": reply,
+            "logs": logs,
+        }
+
+    user_message = messages[-1]["content"] if messages else ""
+    return {
+        "provider": "rule-based",
+        "reply": _build_pilot_chat_fallback(analysis, user_message),
+        "logs": logs,
     }

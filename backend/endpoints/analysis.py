@@ -4,7 +4,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from schemas.analysis import CoachChatRequest, SummaryRequest
 
 from services.analyzer import analyze_log_bytes_async, parse_log_bytes_async
-from services.ai_summary import generate_flight_summary, generate_pilot_coach_reply
+from services.ai_summary import (
+    generate_flight_summary,
+    generate_pilot_coach_reply,
+    generate_pilot_coach_reply_with_logs,
+)
 from services.auth import get_current_user_from_token
 from services.history_store import get_history_item, get_recent_history, prune_history, save_analysis_history
 
@@ -97,6 +101,12 @@ async def ai_summary(payload: SummaryRequest) -> dict:
 async def ai_chat(payload: CoachChatRequest) -> dict:
     messages = [message.model_dump() for message in payload.messages[-10:]]
     return generate_pilot_coach_reply(payload.analysis, messages)
+
+
+@router.post("/ai/chat/logs")
+async def ai_chat_with_logs(payload: CoachChatRequest) -> dict:
+    messages = [message.model_dump() for message in payload.messages[-10:]]
+    return generate_pilot_coach_reply_with_logs(payload.analysis, messages)
 
 
 @router.get("/history")

@@ -11,3 +11,4 @@ streamlit
 sqlalchemy
 alembic
 psycopg2-binary
+openai

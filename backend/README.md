@@ -36,6 +36,7 @@ API доступне на `http://localhost:8501`.
 - `POST /api/map/google` - polyline/static URL для Google Maps.
 - `POST /api/ai/summary` - AI/heuristic текстовий висновок по результату аналізу + короткі рекомендації для пілота.
 - `POST /api/ai/chat` - діалог з AI-коучем пілота на основі аналізу та історії повідомлень.
+- `POST /api/ai/chat/logs` - тестовий endpoint для AI-коуча з технічними логами виклику провайдера (provider/model/status/latency/error).
 
 ## Алгоритмічна база
 
@@ -45,25 +46,29 @@ API доступне на `http://localhost:8501`.
 
 ## AI Summary
 
-- Якщо задано `OPENAI_API_KEY`, endpoint `/api/ai/summary` використовує OpenAI-compatible chat completions і просить модель повернути JSON з полями `summary`, `recommendations`, `risk_level`.
+- Endpoint-и `/api/ai/summary` та `/api/ai/chat` працюють через OpenAI-compatible API.
+- Провайдер обирається через `AI_PROVIDER` (`groq` або `openai`).
 - Без ключа повертається rule-based технічний висновок (fail-safe режим).
 - У відповіді також є `recommendations` для пілота та `risk_level` (`low`, `medium`, `high`).
 
 ### Як підключити реальну модель
 
-1. Додайте в `backend/.env` або в змінні Docker такі значення:
+1. Додайте в `backend/.env` або в змінні Docker такі значення (приклад для Groq):
 
 ```env
-OPENAI_API_KEY=your_key_here
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
+AI_PROVIDER=groq
+GROQ_API_KEY=your_key_here
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_MODEL=llama-3.1-8b-instant
 ```
 
 2. Перезапустіть backend або весь стек Docker.
 3. Запустіть аналіз `.bin` файлу знову.
 4. У картці `AI-порадник пілота` має з'явитися `provider: llm`, а не `rule-based`.
 
-Для чату використовується той самий `OPENAI_API_KEY` і `OPENAI_BASE_URL`, але endpoint `/api/ai/chat` повертає звичайний текстовий `reply` для діалогу з пілотом.
+Для чату використовується та сама конфігурація провайдера, а endpoint `/api/ai/chat` повертає звичайний текстовий `reply` для діалогу з пілотом.
+
+Для дебагу та тестування реальної роботи моделі використовуйте `/api/ai/chat/logs`: він повертає `reply` і блок `logs` з деталями виклику (без API ключа).
 
 Якщо ви використовуєте сумісний з OpenAI API провайдер, просто замініть `OPENAI_BASE_URL` і `OPENAI_MODEL` на потрібні значення.
 
@@ -101,6 +106,17 @@ Optional:
 
 Підтримувані змінні:
 
+- `AI_PROVIDER` (`groq` або `openai`)
+- `GROQ_API_KEY`
+- `GROQ_BASE_URL` (default: `https://api.groq.com/openai/v1`)
+- `GROQ_MODEL` (default: `llama-3.1-8b-instant`)
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL` (default: `https://api.openai.com/v1`)
 - `OPENAI_MODEL` (default: `gpt-4o-mini`)
+
+Додаткові anti-throttle змінні для зовнішнього AI-провайдера:
+
+- `AI_PROVIDER_MIN_INTERVAL_SECONDS` (default: `1.0`) - мінімальна пауза між outbound AI-запитами.
+- `AI_PROVIDER_MAX_RETRIES` (default: `2`) - кількість retry для `429/5xx` і мережевих timeout.
+- `AI_PROVIDER_BACKOFF_SECONDS` (default: `1.5`) - базова пауза retry (лінійний backoff).
+- `AI_PROVIDER_FORBIDDEN_COOLDOWN_SECONDS` (default: `600`) - cooldown після `403`, щоб не продовжувати спамити провайдера.
