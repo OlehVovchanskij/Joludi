@@ -323,7 +323,8 @@ def _call_openai_compatible_chat_with_logs(
     forbidden_cooldown_seconds = _safe_int_env(
         "AI_PROVIDER_FORBIDDEN_COOLDOWN_SECONDS", DEFAULT_FORBIDDEN_COOLDOWN_SECONDS)
     max_retries = _safe_int_env("AI_PROVIDER_MAX_RETRIES", DEFAULT_MAX_RETRIES)
-    backoff_seconds = _safe_float_env("AI_PROVIDER_BACKOFF_SECONDS", DEFAULT_BACKOFF_SECONDS)
+    backoff_seconds = _safe_float_env(
+        "AI_PROVIDER_BACKOFF_SECONDS", DEFAULT_BACKOFF_SECONDS)
 
     logs: dict[str, Any] = {
         "provider": provider,
@@ -385,8 +386,10 @@ def _call_openai_compatible_chat_with_logs(
                 payload = json.loads(raw)
                 content = payload["choices"][0]["message"]["content"].strip()
                 logs["status_code"] = response.getcode()
-                logs["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
-                logs["finish_reason"] = payload.get("choices", [{}])[0].get("finish_reason")
+                logs["latency_ms"] = round(
+                    (time.perf_counter() - started) * 1000, 2)
+                logs["finish_reason"] = payload.get("choices", [{}])[
+                    0].get("finish_reason")
                 logs["response_preview"] = content[:500]
                 logs["retry_count"] = retry_count
                 return content, logs
@@ -400,7 +403,8 @@ def _call_openai_compatible_chat_with_logs(
             status_code = getattr(exc, "code", None)
             last_error = error_body[:1000]
             logs["status_code"] = status_code
-            logs["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+            logs["latency_ms"] = round(
+                (time.perf_counter() - started) * 1000, 2)
 
             is_transient = status_code in {429, 500, 502, 503, 504}
             if is_transient and attempt < max_retries:
@@ -411,7 +415,8 @@ def _call_openai_compatible_chat_with_logs(
                 continue
 
             if status_code == 403:
-                _PROVIDER_COOLDOWN_UNTIL[provider] = time.time() + forbidden_cooldown_seconds
+                _PROVIDER_COOLDOWN_UNTIL[provider] = time.time(
+                ) + forbidden_cooldown_seconds
                 logs["cooldown_seconds"] = forbidden_cooldown_seconds
 
             logs["error"] = last_error
@@ -419,7 +424,8 @@ def _call_openai_compatible_chat_with_logs(
             return None, logs
         except (KeyError, ValueError, urllib.error.URLError, TimeoutError) as exc:
             last_error = str(exc)
-            logs["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
+            logs["latency_ms"] = round(
+                (time.perf_counter() - started) * 1000, 2)
             if attempt < max_retries:
                 retry_count += 1
                 logs["retry_count"] = retry_count
