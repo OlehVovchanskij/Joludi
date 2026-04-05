@@ -18,6 +18,8 @@ services:
     container_name: joludi-backend
     depends_on:
       - postgres
+    command: >
+      sh -c "if [ -f alembic.ini ]; then alembic upgrade head; else echo 'alembic.ini not found, skipping migrations'; fi && uvicorn app:app --host 0.0.0.0 --port 8501 --reload"
     ports:
       - "8501:8501"
     environment:
@@ -40,6 +42,7 @@ services:
       - APP_PUBLIC_URL=${APP_PUBLIC_URL:-http://localhost:3000}
       - EMAIL_VERIFICATION_TOKEN_TTL_MINUTES=${EMAIL_VERIFICATION_TOKEN_TTL_MINUTES:-1440}
     volumes:
+      - ./backend:/app
       - ./backend/logs:/app/logs
       - ./backend/data:/app/data
 
@@ -50,10 +53,14 @@ services:
     container_name: joludi-frontend
     depends_on:
       - backend
+    command: npm run dev
     ports:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE:-http://localhost:8501}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
 
 volumes:
   postgres_data:

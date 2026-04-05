@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
-from typing import Literal
+
+from schemas.analysis import CoachChatRequest, SummaryRequest
 
 from services.analyzer import analyze_log_bytes_async, parse_log_bytes_async
 from services.ai_summary import generate_flight_summary, generate_pilot_coach_reply
@@ -11,20 +11,6 @@ from services.history_store import get_history_item, get_recent_history, prune_h
 
 router = APIRouter(tags=["analysis"])
 bearer_scheme = HTTPBearer(auto_error=False)
-
-
-class SummaryRequest(BaseModel):
-    analysis: dict
-
-
-class ChatMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str
-
-
-class CoachChatRequest(BaseModel):
-    analysis: dict
-    messages: list[ChatMessage]
 
 
 async def _read_upload(file: UploadFile) -> bytes:

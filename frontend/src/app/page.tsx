@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Trajectory3D from "../components/Trajectory3D";
@@ -263,6 +264,8 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
+  const [easterTaps, setEasterTaps] = useState<number[]>([]);
+  const [showEasterEgg, setShowEasterEgg] = useState(false);
 
   const trajectoryTimeline = useMemo(() => {
     const raw = result?.trajectory_enu ?? [];
@@ -834,6 +837,38 @@ export default function Home() {
       value: `${formatNumber(elapsedTime, 1)} s`,
     },
   ];
+
+  function handleSecretTap(
+    event: React.MouseEvent<HTMLSpanElement, MouseEvent>,
+  ) {
+    if (!event.altKey || !event.shiftKey) {
+      return;
+    }
+
+    const now = Date.now();
+    setEasterTaps((current) => {
+      const recent = current.filter((stamp) => now - stamp < 1200);
+      const next = [...recent, now];
+      if (next.length >= 4) {
+        setShowEasterEgg(true);
+        return [];
+      }
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    if (!showEasterEgg) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setShowEasterEgg(false);
+    }, 12000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [showEasterEgg]);
+
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-8 md:px-8">
       <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-40 bg-[radial-gradient(60%_90%_at_50%_10%,rgba(11,93,87,0.22),transparent)]" />
@@ -852,7 +887,10 @@ export default function Home() {
             <p className="inline-flex w-fit rounded-full border border-brand/20 bg-brand/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-ink">
               Mission Control
             </p>
-            <span className="rounded-full border border-line/70 bg-surface/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-foreground/55">
+            <span
+              onClick={handleSecretTap}
+              className="rounded-full border border-line/70 bg-surface/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-foreground/55"
+            >
               Telemetry Deck
             </span>
             {isAuthorized ? (
@@ -975,8 +1013,8 @@ export default function Home() {
           <form className="space-y-4" onSubmit={onSubmit}>
             <label
               className={`flex min-h-[170px] cursor-pointer flex-col justify-between rounded-2xl border border-dashed px-4 py-4 text-sm transition ${isDragging
-                  ? "border-brand/70 bg-brand/10"
-                  : "border-line/70 bg-surface"
+                ? "border-brand/70 bg-brand/10"
+                : "border-line/70 bg-surface"
                 }`}
               onDragOver={(event) => {
                 event.preventDefault();
@@ -1298,8 +1336,8 @@ export default function Home() {
                 >
                   <div
                     className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${message.role === "user"
-                        ? "bg-brand text-white"
-                        : "border border-line/60 bg-surface text-foreground"
+                      ? "bg-brand text-white"
+                      : "border border-line/60 bg-surface text-foreground"
                       }`}
                   >
                     {message.content}
@@ -1406,8 +1444,8 @@ export default function Home() {
                 type="button"
                 onClick={() => setActiveView("map")}
                 className={`rounded-full px-4 py-2 text-sm font-medium transition ${activeView === "map"
-                    ? "bg-brand text-white shadow-[0_10px_22px_rgba(11,93,87,0.3)]"
-                    : "border border-line bg-surface text-foreground/75"
+                  ? "bg-brand text-white shadow-[0_10px_22px_rgba(11,93,87,0.3)]"
+                  : "border border-line bg-surface text-foreground/75"
                   }`}
               >
                 OSM 2D
@@ -1416,8 +1454,8 @@ export default function Home() {
                 type="button"
                 onClick={() => setActiveView("threeD")}
                 className={`rounded-full px-4 py-2 text-sm font-medium transition ${activeView === "threeD"
-                    ? "bg-brand text-white shadow-[0_10px_22px_rgba(11,93,87,0.3)]"
-                    : "border border-line bg-surface text-foreground/75"
+                  ? "bg-brand text-white shadow-[0_10px_22px_rgba(11,93,87,0.3)]"
+                  : "border border-line bg-surface text-foreground/75"
                   }`}
               >
                 3D ENU
@@ -1486,8 +1524,8 @@ export default function Home() {
                         type="button"
                         onClick={() => setPlaybackSpeed(speed)}
                         className={`rounded-full px-3 py-1 text-xs font-semibold ${playbackSpeed === speed
-                            ? "bg-brand text-white"
-                            : "border border-line bg-surface text-foreground/65"
+                          ? "bg-brand text-white"
+                          : "border border-line bg-surface text-foreground/65"
                           }`}
                       >
                         {speed}x
@@ -1566,6 +1604,37 @@ export default function Home() {
           ))}
         </div>
       </motion.section>
+
+      {showEasterEgg && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4"
+          onClick={() => setShowEasterEgg(false)}
+          role="presentation"
+        >
+          <div
+            className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/20 bg-black shadow-[0_30px_80px_rgba(0,0,0,0.55)]"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-label="Secret easter egg"
+          >
+            <Image
+              src="/assets/secret-tech-lead.jpg"
+              alt="Secret team shot"
+              width={900}
+              height={1200}
+              className="h-auto w-full object-cover"
+              priority
+            />
+            <button
+              type="button"
+              onClick={() => setShowEasterEgg(false)}
+              className="absolute right-3 top-3 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-white/90"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

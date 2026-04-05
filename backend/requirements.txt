@@ -9,4 +9,5 @@ pymavlink
 haversine
 streamlit
 sqlalchemy
+alembic
 psycopg2-binary

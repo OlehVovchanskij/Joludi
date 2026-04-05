@@ -10,8 +10,10 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from functools import lru_cache
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, create_engine, delete, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy import create_engine, delete, select
+from sqlalchemy.orm import Session
+
+from models.auth import AuthSession, AuthUser
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -39,41 +41,6 @@ SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Joludi")
 SMTP_USE_TLS = _env_bool("SMTP_USE_TLS", True)
 SMTP_USE_SSL = _env_bool("SMTP_USE_SSL", False)
 APP_PUBLIC_URL = os.getenv("APP_PUBLIC_URL", "http://localhost:3000")
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class AuthUser(Base):
-    __tablename__ = "auth_users"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
-    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    email_verification_token_hash: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, index=True
-    )
-    email_verification_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AuthSession(Base):
-    __tablename__ = "auth_sessions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), index=True
-    )
-    access_token: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    refresh_token: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 def _now() -> datetime:
@@ -302,7 +269,8 @@ def authenticate_user(email: str, password: str) -> dict[str, object]:
 def refresh_session(refresh_token: str) -> dict[str, object]:
     with Session(_engine()) as session:
         current_session = session.execute(
-            select(AuthSession).where(AuthSession.refresh_token == refresh_token)
+            select(AuthSession).where(
+                AuthSession.refresh_token == refresh_token)
         ).scalar_one_or_none()
         if current_session is None or not _refresh_is_active(current_session):
             raise ValueError("Invalid or expired refresh token")
@@ -324,7 +292,8 @@ def refresh_session(refresh_token: str) -> dict[str, object]:
 def logout_session(refresh_token: str) -> None:
     with Session(_engine()) as session:
         result = session.execute(
-            delete(AuthSession).where(AuthSession.refresh_token == refresh_token)
+            delete(AuthSession).where(
+                AuthSession.refresh_token == refresh_token)
         )
         if result.rowcount == 0:
             raise ValueError("Invalid refresh token")
@@ -353,7 +322,8 @@ def verify_email_token(token: str) -> dict[str, object]:
 
     with Session(_engine()) as session:
         user = session.execute(
-            select(AuthUser).where(AuthUser.email_verification_token_hash == token_hash)
+            select(AuthUser).where(
+                AuthUser.email_verification_token_hash == token_hash)
         ).scalar_one_or_none()
         if user is None:
             raise ValueError("Invalid verification token")

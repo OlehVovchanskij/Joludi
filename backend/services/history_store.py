@@ -5,44 +5,16 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import DateTime, Float, Integer, JSON, String, create_engine, delete, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy import create_engine, delete, select
+from sqlalchemy.orm import Session
 
-from db_migrations import apply_migrations
+from models.history import ParseHistory
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 HISTORY_ENABLED = os.getenv("HISTORY_ENABLED", "true").strip().lower() in {
     "1", "true", "yes", "on"}
 HISTORY_RETENTION_DAYS = int(os.getenv("HISTORY_RETENTION_DAYS", "30"))
 HISTORY_MAX_ROWS = int(os.getenv("HISTORY_MAX_ROWS", "20000"))
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class ParseHistory(Base):
-    __tablename__ = "parse_history"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str | None] = mapped_column(
-        String(64), index=True, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), index=True)
-    filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    message_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
-    total_distance_m: Mapped[float | None] = mapped_column(
-        Float, nullable=True)
-    max_horizontal_speed_mps: Mapped[float |
-                                     None] = mapped_column(Float, nullable=True)
-    max_vertical_speed_mps: Mapped[float |
-                                   None] = mapped_column(Float, nullable=True)
-    max_acceleration_mps2: Mapped[float |
-                                  None] = mapped_column(Float, nullable=True)
-    max_altitude_gain_m: Mapped[float |
-                                None] = mapped_column(Float, nullable=True)
-    analysis_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 def _is_configured() -> bool:
@@ -57,13 +29,6 @@ def _engine():
     if not _is_configured():
         return None
     return create_engine(DATABASE_URL, pool_pre_ping=True)
-
-
-def create_history_tables() -> None:
-    engine = _engine()
-    if engine is None:
-        return
-    apply_migrations(engine)
 
 
 def _to_float(value: object) -> float | None:

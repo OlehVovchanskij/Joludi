@@ -45,6 +45,18 @@
 docker compose up --build
 ```
 
+Після першого запуску достатньо:
+
+```bash
+docker compose up
+```
+
+У Docker-режимі:
+
+- backend автоматично виконує `alembic upgrade head` при старті (якщо є `alembic.ini`);
+- backend запускається з `uvicorn --reload`, тому зміни коду підхоплюються без rebuild;
+- frontend запускається через `npm run dev` з монтуванням коду, тому зміни UI теж видно без rebuild.
+
 Сервіси:
 
 - Frontend: http://localhost:3000
