@@ -16,6 +16,7 @@ from schemas.auth import (
 )
 
 from services.auth import (
+    EmailDeliveryError,
     authenticate_user,
     get_current_user_from_token,
     logout_session,
@@ -52,6 +53,11 @@ def register(payload: RegisterRequest) -> AuthResponse:
     try:
         result = register_user(
             payload.email, payload.password, payload.display_name)
+    except EmailDeliveryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -102,6 +108,11 @@ def verify_email(payload: VerifyEmailRequest) -> AuthResponse:
 def resend_verification(payload: ResendVerificationRequest) -> dict[str, str]:
     try:
         return resend_verification_email(payload.email)
+    except EmailDeliveryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

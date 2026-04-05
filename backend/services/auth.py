@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 import secrets
 import smtplib
@@ -33,14 +34,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 SMTP_HOST = os.getenv("SMTP_HOST", "")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_USER)
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Joludi")
-SMTP_USE_TLS = _env_bool("SMTP_USE_TLS", True)
-SMTP_USE_SSL = _env_bool("SMTP_USE_SSL", False)
+SMTP_USE_TLS = _env_bool("SMTP_USE_TLS", False)
+SMTP_USE_SSL = _env_bool("SMTP_USE_SSL", True)
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465" if SMTP_USE_SSL else "587"))
 APP_PUBLIC_URL = os.getenv("APP_PUBLIC_URL", "http://localhost:3000")
+logger = logging.getLogger(__name__)
+
+
+class EmailDeliveryError(Exception):
+    """Raised when verification email cannot be delivered."""
 
 
 def _now() -> datetime:
@@ -172,20 +178,26 @@ def _send_verification_email(email: str, token: str, display_name: str | None = 
         )
     )
 
-    if SMTP_USE_SSL:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as client:
+    try:
+        if SMTP_USE_SSL:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as client:
+                if SMTP_USER:
+                    client.login(SMTP_USER, SMTP_PASSWORD)
+                client.send_message(message)
+            return
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as client:
+            if SMTP_USE_TLS:
+                client.starttls(context=ssl.create_default_context())
             if SMTP_USER:
                 client.login(SMTP_USER, SMTP_PASSWORD)
             client.send_message(message)
-        return
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as client:
-        if SMTP_USE_TLS:
-            client.starttls(context=ssl.create_default_context())
-        if SMTP_USER:
-            client.login(SMTP_USER, SMTP_PASSWORD)
-        client.send_message(message)
+    except (OSError, smtplib.SMTPException, TimeoutError) as exc:
+        logger.exception("Failed to send verification email to %s", email)
+        raise EmailDeliveryError(
+            "Unable to send verification email right now"
+        ) from exc
 
 
 def _session_response(session: AuthSession) -> dict[str, object]:

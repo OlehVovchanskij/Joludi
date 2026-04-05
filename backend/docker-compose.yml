@@ -10,7 +10,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-joludi} -d ${POSTGRES_DB:-joludi}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-joludi} -d ${POSTGRES_DB:-joludi}",
+        ]
       interval: 2s
       timeout: 5s
       retries: 10
@@ -41,13 +45,13 @@ services:
       - HISTORY_RETENTION_DAYS=${HISTORY_RETENTION_DAYS:-30}
       - HISTORY_MAX_ROWS=${HISTORY_MAX_ROWS:-20000}
       - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_PORT=${SMTP_PORT:-465}
       - SMTP_USER=${SMTP_USER:-}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-}
       - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Joludi_app}
-      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
-      - SMTP_USE_SSL=${SMTP_USE_SSL:-false}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-false}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-true}
       - APP_PUBLIC_URL=${APP_PUBLIC_URL:-http://localhost:3000}
       - EMAIL_VERIFICATION_TOKEN_TTL_MINUTES=${EMAIL_VERIFICATION_TOKEN_TTL_MINUTES:-1440}
     volumes:

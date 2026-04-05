@@ -83,9 +83,9 @@ GROQ_MODEL=llama-3.1-8b-instant
 - History stores only compact metadata/metrics (no full trajectory, no heavy payload blobs).
 - History is user-scoped: each user can access and prune only their own records.
 - Automatic cleanup uses:
-	- `HISTORY_RETENTION_DAYS` (default: 30)
-	- `HISTORY_MAX_ROWS` (default: 20000)
-	- `HISTORY_ENABLED` (default: true)
+  - `HISTORY_RETENTION_DAYS` (default: 30)
+  - `HISTORY_MAX_ROWS` (default: 20000)
+  - `HISTORY_ENABLED` (default: true)
 
 ## Email verification / SMTP env
 
@@ -103,6 +103,30 @@ GROQ_MODEL=llama-3.1-8b-instant
 Optional:
 
 - `EMAIL_PROVIDER=smtp`
+
+### Recommended Render SMTP (SSL)
+
+For providers that require implicit SSL:
+
+```env
+SMTP_HOST=your.smtp.host
+SMTP_PORT=465
+SMTP_USE_SSL=true
+SMTP_USE_TLS=false
+SMTP_USER=your_user
+SMTP_PASSWORD=your_password
+SMTP_FROM_EMAIL=no-reply@your-domain.com
+SMTP_FROM_NAME=Joludi
+APP_PUBLIC_URL=https://your-app.onrender.com
+```
+
+If your provider requires STARTTLS instead, use:
+
+```env
+SMTP_PORT=587
+SMTP_USE_SSL=false
+SMTP_USE_TLS=true
+```
 
 Підтримувані змінні:
 
