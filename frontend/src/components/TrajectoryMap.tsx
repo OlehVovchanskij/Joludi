@@ -62,22 +62,22 @@ export default function TrajectoryMap({
       : null;
 
   return (
-    <div className="relative h-[460px] w-full overflow-hidden rounded-3xl border border-line/70 bg-surface shadow-[0_14px_44px_rgba(20,33,29,0.08)]">
+    <div className="relative h-[460px] w-full overflow-hidden rounded-3xl border border-line/70 bg-[linear-gradient(180deg,rgba(255,253,248,0.96)_0%,rgba(242,235,226,0.9)_100%)] shadow-[0_14px_44px_rgba(20,33,29,0.08)]">
       <div className="absolute left-4 top-4 z-[500] rounded-full border border-line/70 bg-surface/90 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-foreground/65 shadow-lg backdrop-blur-md">
-        OpenStreetMap track
+        OpenStreetMap маршрут
       </div>
       <div className="absolute right-4 top-4 z-[500] flex gap-2 text-xs font-medium text-foreground/70">
         <span className="rounded-full border border-line/70 bg-surface/90 px-3 py-1 shadow-lg backdrop-blur-md">
-          Launch
+          Старт
         </span>
         <span className="rounded-full border border-line/70 bg-surface/90 px-3 py-1 shadow-lg backdrop-blur-md">
-          Landing
+          Фініш
         </span>
       </div>
       {activeMeta && activePoint && (
         <div className="absolute bottom-4 left-4 z-[500] rounded-2xl border border-line/70 bg-surface/90 px-3 py-2 text-xs text-foreground/70 shadow-lg backdrop-blur-md">
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/55">
-            Live point
+            Поточна точка
           </p>
           <div className="mt-1 flex flex-wrap gap-3">
             <span>t+{formatNumber(activeMeta.time_s, 1)}s</span>

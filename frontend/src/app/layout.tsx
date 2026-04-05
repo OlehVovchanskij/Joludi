@@ -14,8 +14,9 @@ const geistMono = Space_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "UAV Telemetry Analyzer",
-  description: "Система аналізу телеметрії та 3D-візуалізації польотів БПЛА",
+  title: "Joludi | Аналіз телеметрії БПЛА",
+  description:
+    "Платформа для аналізу логів БПЛА, перегляду траєкторії та швидкої оцінки ризиків польоту.",
 };
 
 export default function RootLayout({
@@ -25,11 +26,16 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="uk"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col" suppressHydrationWarning>{children}</body>
+      <body
+        className="min-h-full flex flex-col bg-background text-foreground"
+        suppressHydrationWarning
+      >
+        {children}
+      </body>
     </html>
   );
 }

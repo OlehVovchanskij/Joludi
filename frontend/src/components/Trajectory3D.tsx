@@ -15,8 +15,9 @@ export default function Trajectory3D({
 }: Trajectory3DProps) {
   if (!figure) {
     return (
-      <div className="rounded-3xl border border-dashed border-line bg-surface-soft/70 p-6 text-sm text-foreground/60">
-        3D візуалізація зʼявиться після аналізу логу.
+      <div className="rounded-3xl border border-dashed border-line bg-[linear-gradient(180deg,rgba(255,253,248,0.9)_0%,rgba(242,235,226,0.9)_100%)] p-6 text-sm text-foreground/60 shadow-[0_12px_28px_rgba(27,35,33,0.06)]">
+        3D-візуалізація зʼявиться після аналізу. Поки що доступна карта та
+        метрики польоту.
       </div>
     );
   }
@@ -56,7 +57,13 @@ export default function Trajectory3D({
   }
 
   return (
-    <div className="overflow-hidden rounded-3xl border border-line/70 bg-surface shadow-[0_14px_44px_rgba(20,33,29,0.08)]">
+    <div className="overflow-hidden rounded-3xl border border-line/70 bg-[linear-gradient(180deg,rgba(255,253,248,0.96)_0%,rgba(242,235,226,0.9)_100%)] shadow-[0_14px_44px_rgba(20,33,29,0.08)]">
+      <div className="flex items-center justify-between border-b border-line/60 px-4 py-3 text-xs uppercase tracking-[0.16em] text-foreground/50">
+        <span>ENU 3D</span>
+        <span>
+          {activePoint ? "Активна точка показана" : "Без активної точки"}
+        </span>
+      </div>
       <Plot
         data={plotData}
         layout={{
