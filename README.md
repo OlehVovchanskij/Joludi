@@ -37,11 +37,12 @@
 ✅ **Pilot Training & Coaching** — AI-powered recommendations for flight improvement  
 ✅ **Mission Metrics Computation** — Distance, speed, acceleration, altitude profiles  
 ✅ **Interactive Visualization** — 3D trajectory on maps with timeline playback  
-✅ **Flight Performance Tracking** — History management and trend analysis  
+✅ **Flight Performance Tracking** — History management and trend analysis
 
 ### Problem Solved
 
 Raw Ardupilot flight logs (binary `.bin` files) are difficult to interpret without specialized tools. Pilots, engineers, and trainers need:
+
 - **Quick parsing** of flight data
 - **Intuitive visualizations** showing flight paths and dynamics
 - **Intelligent analysis** of flight performance
@@ -54,12 +55,14 @@ Joludi solves all of these in one integrated platform.
 ## ✨ Key Features
 
 ### 1. **Automatic Log Parsing**
+
 - Reads binary Ardupilot `.bin` flight logs
 - Extracts GPS positions and IMU acceleration data
 - Auto-detects sampling rates and unit conversions
 - Handles multi-format telemetry data
 
 ### 2. **Flight Metrics Computation**
+
 - **Total Distance** — Haversine formula over GPS waypoints
 - **Flight Duration** — Elapsed time between log start/end
 - **Maximum Speeds** — Horizontal and vertical velocity peaks
@@ -68,6 +71,7 @@ Joludi solves all of these in one integrated platform.
 - **Detailed Metadata** — Sampling rates, unit information, message counts
 
 ### 3. **Interactive 3D/2D Visualization**
+
 - **3D Trajectory** — East-North-Up coordinate space visualization
 - **2D Map** — OpenStreetMap-based flight path with animated playback
 - **Timeline Scrubber** — Frame-by-frame analysis with variable playback speed
@@ -75,6 +79,7 @@ Joludi solves all of these in one integrated platform.
 - **Exportable** — Google Maps compatible polyline encoding
 
 ### 4. **AI-Powered Analysis**
+
 - **Flight Summaries** — LLM-generated text summaries of mission characteristics
 - **Risk Assessment** — Automatic classification (Low/Medium/High risk)
 - **Coaching Feedback** — AI pilot coach with actionable recommendations
@@ -83,12 +88,14 @@ Joludi solves all of these in one integrated platform.
 - **Fallback Mode** — Rule-based analysis when no API key present
 
 ### 5. **User Authentication & Multi-Tenancy**
+
 - **Registration & Login** — Email-based user accounts with JWT tokens
 - **Email Verification** — SMTP-based account activation
 - **Session Management** — Access/refresh token system
 - **User-Scoped Data** — Each user's flight history is private
 
 ### 6. **Flight History Management**
+
 - **Browse Recent Flights** — Compact metadata view
 - **Automatic Cleanup** — 30-day retention policy with configurable limits
 - **Full Payload Storage** — Complete analysis saved for later retrieval
@@ -99,6 +106,7 @@ Joludi solves all of these in one integrated platform.
 ## 🛠 Technology Stack
 
 ### **Backend**
+
 ```
 Framework: FastAPI (Async Python Web Framework)
 Language: Python 3.9+
@@ -119,6 +127,7 @@ Optional Performance:
 ```
 
 ### **Frontend**
+
 ```
 Framework: Next.js 16.2 (React 19.2 + TypeScript)
 Language: TypeScript
@@ -133,6 +142,7 @@ Libraries:
 ```
 
 ### **DevOps & Deployment**
+
 ```
 Containerization: Docker & Docker Compose
 Orchestration: Compatible with Kubernetes
@@ -172,6 +182,7 @@ docker-compose up -d
 ### Option 2: Local Development
 
 #### Backend Setup
+
 ```bash
 cd backend
 python -m venv venv
@@ -187,6 +198,7 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8501
 ```
 
 #### Frontend Setup
+
 ```bash
 cd frontend
 npm install
@@ -322,6 +334,7 @@ Accuracy: High precision for ranges < 100 km
 ```
 
 **Formula:**
+
 ```
 lat_rad = latitude / 10^7 * π/180
 lon_rad = longitude / 10^7 * π/180
@@ -337,6 +350,7 @@ R ≈ 6,371 km (Earth radius)
 ### Performance Optimization: C Extension
 
 The optional C extension (`flight_math`) provides **50-100× speedup** for:
+
 - Haversine distance calculations
 - Coordinate transformations
 - Trapezoidal integration
@@ -351,51 +365,51 @@ Falls back to pure Python if unavailable (transparent to user).
 
 #### **Analysis Endpoints**
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/api/parse` | ❌ | Parse `.bin` file → telemetry data |
-| `POST` | `/api/metrics` | ❌ | Parse → compute metrics only |
-| `POST` | `/api/trajectory` | ❌ | Parse → ENU trajectory + maps |
-| `POST` | `/api/analyze` | ✅* | Full analysis pipeline |
-| `POST` | `/api/map/google` | ❌ | Generate Google Maps polyline |
+| Method | Endpoint          | Auth | Description                        |
+| ------ | ----------------- | ---- | ---------------------------------- |
+| `POST` | `/api/parse`      | ❌   | Parse `.bin` file → telemetry data |
+| `POST` | `/api/metrics`    | ❌   | Parse → compute metrics only       |
+| `POST` | `/api/trajectory` | ❌   | Parse → ENU trajectory + maps      |
+| `POST` | `/api/analyze`    | ✅\* | Full analysis pipeline             |
+| `POST` | `/api/map/google` | ❌   | Generate Google Maps polyline      |
 
-*Optional auth (saves to history if authenticated)
+\*Optional auth (saves to history if authenticated)
 
 #### **AI Endpoints**
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/api/ai/summary` | ❌ | Generate flight summary |
-| `POST` | `/api/ai/chat` | ❌ | Interactive pilot coach |
-| `POST` | `/api/ai/chat/logs` | ❌ | Chat with debug logs |
+| Method | Endpoint            | Auth | Description             |
+| ------ | ------------------- | ---- | ----------------------- |
+| `POST` | `/api/ai/summary`   | ❌   | Generate flight summary |
+| `POST` | `/api/ai/chat`      | ❌   | Interactive pilot coach |
+| `POST` | `/api/ai/chat/logs` | ❌   | Chat with debug logs    |
 
 #### **User Authentication**
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/auth/register` | Create account |
-| `POST` | `/api/auth/login` | Login (returns JWT tokens) |
-| `POST` | `/api/auth/refresh` | Refresh access token |
-| `POST` | `/api/auth/logout` | Revoke refresh token |
-| `POST` | `/api/auth/verify-email` | Confirm email |
-| `POST` | `/api/auth/resend-verification` | Request new verification email |
-| `GET` | `/api/auth/me` | Get current user (auth required) |
+| Method | Endpoint                        | Description                      |
+| ------ | ------------------------------- | -------------------------------- |
+| `POST` | `/api/auth/register`            | Create account                   |
+| `POST` | `/api/auth/login`               | Login (returns JWT tokens)       |
+| `POST` | `/api/auth/refresh`             | Refresh access token             |
+| `POST` | `/api/auth/logout`              | Revoke refresh token             |
+| `POST` | `/api/auth/verify-email`        | Confirm email                    |
+| `POST` | `/api/auth/resend-verification` | Request new verification email   |
+| `GET`  | `/api/auth/me`                  | Get current user (auth required) |
 
 #### **History Management**
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `GET` | `/api/history` | ✅ | List user's flight history |
-| `GET` | `/api/history/{id}` | ✅ | Get single analysis |
-| `POST` | `/api/history/prune` | ✅ | Manual cleanup |
+| Method | Endpoint             | Auth | Description                |
+| ------ | -------------------- | ---- | -------------------------- |
+| `GET`  | `/api/history`       | ✅   | List user's flight history |
+| `GET`  | `/api/history/{id}`  | ✅   | Get single analysis        |
+| `POST` | `/api/history/prune` | ✅   | Manual cleanup             |
 
 #### **Health & Docs**
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/docs` | Swagger UI (interactive docs) |
-| `GET` | `/redoc` | ReDoc (alternative docs) |
+| Method | Endpoint  | Description                   |
+| ------ | --------- | ----------------------------- |
+| `GET`  | `/health` | Health check                  |
+| `GET`  | `/docs`   | Swagger UI (interactive docs) |
+| `GET`  | `/redoc`  | ReDoc (alternative docs)      |
 
 ### Example: Upload and Analyze Flight Log
 
@@ -677,22 +691,23 @@ spec:
   template:
     spec:
       containers:
-      - name: backend
-        image: joludi-backend:latest
-        ports:
-        - containerPort: 8501
-        env:
-        - name: DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: joludi-secrets
-              key: database-url
-        # ... more env vars
+        - name: backend
+          image: joludi-backend:latest
+          ports:
+            - containerPort: 8501
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: joludi-secrets
+                  key: database-url
+          # ... more env vars
 ```
 
 ### Cloud Deployment
 
 Joludi can be deployed to:
+
 - **AWS (ECS, EKS)**
 - **Google Cloud (Cloud Run, GKE)**
 - **Azure (App Service, AKS)**
@@ -802,11 +817,13 @@ python -c "from fast_math import haversine; print(haversine(...))"
 ### Code Style
 
 **Python:**
+
 - PEP 8 compliant
 - Use type hints (`from typing import ...`)
 - Docstrings for public functions
 
 **TypeScript/React:**
+
 - ESLint configured (`npm run lint`)
 - Prettier for formatting
 - Functional components + hooks
@@ -853,6 +870,7 @@ test: Add tests
 ## 🔧 Troubleshooting
 
 ### Backend Connection Errors
+
 ```bash
 # Check if backend is running
 curl http://localhost:8501/health
@@ -865,6 +883,7 @@ docker exec joludi_backend_1 env | grep DATABASE
 ```
 
 ### Database Connection Issues
+
 ```bash
 # Check PostgreSQL
 docker logs joludi_postgres_1
@@ -878,6 +897,7 @@ docker-compose up
 ```
 
 ### Frontend Build Issues
+
 ```bash
 # Clear cache
 rm -rf node_modules .next
@@ -921,6 +941,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) file for 
 Built with ❤️ for drone pilots, engineers, and enthusiasts.
 
 Thanks to:
+
 - **Ardupilot Community** — Log format specifications
 - **FastAPI** — Modern Python web framework
 - **Next.js Team** — Excellent React framework
