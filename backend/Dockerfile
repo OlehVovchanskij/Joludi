@@ -14,6 +14,7 @@ RUN sed -i \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     gcc \
+    python3-dev \
     libxml2-dev \
     libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -21,6 +22,9 @@ RUN apt-get update \
 COPY . /app
 
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Compile the high-performance C math extension (haversine, integration, ENU).
+RUN python native/setup.py build_ext --inplace || echo "C extension build skipped"
 
 EXPOSE 8501
 

@@ -9,13 +9,20 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-joludi} -d ${POSTGRES_DB:-joludi}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
   drone-analyzer:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: on-failure
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     command: >
       sh -c "if [ -f alembic.ini ]; then alembic upgrade head; else echo 'alembic.ini not found, skipping migrations'; fi && uvicorn app:app --host 0.0.0.0 --port 8501 --reload"
     ports:

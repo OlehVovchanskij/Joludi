@@ -232,16 +232,15 @@ def register_user(email: str, password: str, display_name: str | None = None) ->
         session.add(user)
         session.flush()
 
-        auth_session = _new_session(user.id)
-        session.add(auth_session)
+        user_response = _public_user(user)
         session.commit()
 
     _send_verification_email(
-        user.email, verification_token, user.display_name)
+        normalized_email, verification_token, display_name)
 
     return {
-        "user": _public_user(user),
-        "session": _session_response(auth_session),
+        "user": user_response,
+        "session": None,
         "requires_email_verification": True,
     }
 
@@ -261,9 +260,11 @@ def authenticate_user(email: str, password: str) -> dict[str, object]:
 
         auth_session = _new_session(user.id)
         session.add(auth_session)
+        user_response = _public_user(user)
+        session_resp = _session_response(auth_session)
         session.commit()
 
-    return {"user": _public_user(user), "session": _session_response(auth_session)}
+    return {"user": user_response, "session": session_resp}
 
 
 def refresh_session(refresh_token: str) -> dict[str, object]:
@@ -284,9 +285,11 @@ def refresh_session(refresh_token: str) -> dict[str, object]:
         session.delete(current_session)
         new_session = _new_session(user.id)
         session.add(new_session)
+        user_response = _public_user(user)
+        session_resp = _session_response(new_session)
         session.commit()
 
-    return {"user": _public_user(user), "session": _session_response(new_session)}
+    return {"user": user_response, "session": session_resp}
 
 
 def logout_session(refresh_token: str) -> None:
@@ -337,9 +340,11 @@ def verify_email_token(token: str) -> dict[str, object]:
         user.email_verification_expires_at = None
         auth_session = _new_session(user.id)
         session.add(auth_session)
+        user_response = _public_user(user)
+        session_resp = _session_response(auth_session)
         session.commit()
 
-    return {"user": _public_user(user), "session": _session_response(auth_session)}
+    return {"user": user_response, "session": session_resp}
 
 
 def resend_verification_email(email: str) -> dict[str, str]:
@@ -355,8 +360,9 @@ def resend_verification_email(email: str) -> dict[str, str]:
             raise ValueError("Email already verified")
 
         verification_token = _issue_email_verification(user)
+        display_name_to_send = user.display_name
         session.commit()
 
     _send_verification_email(
-        user.email, verification_token, user.display_name)
+        normalized_email, verification_token, display_name_to_send)
     return {"status": "verification_sent"}

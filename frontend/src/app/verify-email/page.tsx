@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 type VerifyResponse = {
     user: {
@@ -30,9 +30,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8501";
 export default function VerifyEmailPage() {
     const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
     const [message, setMessage] = useState("Підтвердження пошти...");
+    const hasRun = useRef(false);
 
     useEffect(() => {
         const run = async () => {
+            if (hasRun.current) return;
+            hasRun.current = true;
             const token = new URLSearchParams(window.location.search).get("token");
             if (!token) {
                 setStatus("error");

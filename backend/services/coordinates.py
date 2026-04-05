@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from math import atan2, cos, radians, sin, sqrt
 
+logger = logging.getLogger(__name__)
+
 EARTH_RADIUS_M = 6378137.0
+
+# ---------------------------------------------------------------------------
+# Try to import the compiled C extension for ~50-100× speed-up on hot paths.
+# Falls back transparently to pure Python when the extension is not compiled.
+# ---------------------------------------------------------------------------
+try:
+    import flight_math as _c  # type: ignore[import-untyped]
+    _NATIVE = True
+    logger.info("flight_math C extension loaded — native math enabled.")
+except ImportError:
+    _c = None  # type: ignore[assignment]
+    _NATIVE = False
+    logger.info("flight_math C extension not found — using pure-Python math.")
 
 
 @dataclass(frozen=True)
@@ -20,6 +36,10 @@ def haversine_distance_m(
     longitude_2: float,
 ) -> float:
     """Return great-circle distance in meters using the haversine formula."""
+    if _NATIVE:
+        return _c.haversine_distance_m(latitude_1, longitude_1,
+                                        latitude_2, longitude_2)
+
     latitude_1_rad = radians(latitude_1)
     latitude_2_rad = radians(latitude_2)
     latitude_delta = radians(latitude_2 - latitude_1)
@@ -45,6 +65,11 @@ def wgs84_to_enu(
     A local tangent plane is accurate enough for flight logs and is much lighter
     than a full geodetic chain for short-range drone missions.
     """
+    if _NATIVE:
+        return _c.wgs84_to_enu(latitude, longitude, altitude_m,
+                                origin.latitude, origin.longitude,
+                                origin.altitude_m)
+
     latitude_rad = radians(latitude)
     origin_latitude_rad = radians(origin.latitude)
     delta_latitude = radians(latitude - origin.latitude)
