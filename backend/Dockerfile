@@ -28,4 +28,4 @@ RUN python native/setup.py build_ext --inplace || echo "C extension build skippe
 
 EXPOSE 8501
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8501"]
+CMD ["sh", "-c", "if [ -f alembic.ini ]; then alembic upgrade head; else echo 'alembic.ini not found, skipping migrations'; fi && uvicorn app:app --host 0.0.0.0 --port 8501"]
